@@ -1,0 +1,1044 @@
+<!doctype html>
+<html ng-app="App">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="generator" content="Rally version 0.9.1">
+  <title>Rally | Rally Task Report</title>
+  
+  
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/nvd3/1.1.15-beta/nv.d3.min.css">
+  <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/angularjs/1.3.3/angular.min.js"></script>
+  <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/d3/3.4.13/d3.min.js"></script>
+  <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/nvd3/1.1.15-beta/nv.d3.min.js"></script>
+  
+
+  <script type="text/javascript">
+    "use strict";
+    var widgetDirective = function($compile) {
+  var Chart = {
+    _render: function(node, data, chart, do_after){
+      nv.addGraph(function() {
+        d3.select(node)
+          .datum(data).transition().duration(0)
+          .call(chart);
+        if (typeof do_after === "function") {
+          do_after(node, chart)
+        }
+        nv.utils.windowResize(chart.update);
+      })
+    },
+    _widgets: {
+      Pie: "pie",
+      StackedArea: "stack",
+      Lines: "lines",
+      Histogram: "histogram"
+    },
+    get_chart: function(widget) {
+      if (widget in this._widgets) {
+        var name = this._widgets[widget];
+        return Chart[name]
+      }
+      return function() { console.log("Error: unexpected widget:", widget) }
+    },
+    pie: function(node, data, opts, do_after) {
+      var chart = nv.models.pieChart()
+        .x(function(d) { return d.key })
+        .y(function(d) { return d.values })
+        .showLabels(true)
+        .labelType("percent")
+        .donut(true)
+        .donutRatio(0.25)
+        .donutLabelsOutside(true)
+        .color(function(d){
+          if (d.data && d.data.color) { return d.data.color }
+        });
+      var colorizer = new Chart.colorizer("errors"), data_ = [];
+      for (var i in data) {
+        data_.push({key:data[i][0], values:data[i][1], color:colorizer.get_color(data[i][0])})
+      }
+      Chart._render(node, data_, chart)
+    },
+    colorizer: function(failure_key, failure_color) {
+      this.failure_key = failure_key || "failed_duration";
+      this.failure_color = failure_color || "#d62728";  // red
+      this.color_idx = -1;
+      /* NOTE(amaretskiy): this is actually a result of
+         d3.scale.category20().range(), excluding red color (#d62728)
+         which is reserved for errors */
+      this.colors = ["#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c",
+                     "#98df8a", "#ff9896", "#9467bd", "#c5b0d5", "#8c564b",
+                     "#c49c94", "#e377c2", "#f7b6d2", "#7f7f7f", "#c7c7c7",
+                     "#bcbd22", "#dbdb8d", "#17becf", "#9edae5"];
+      this.get_color = function(key) {
+        if (key === this.failure_key) {
+          return this.failure_color
+        }
+        if (this.color_idx > (this.colors.length - 2)) {
+          this.color_idx = 0
+        } else {
+          this.color_idx++
+        }
+        return this.colors[this.color_idx]
+      }
+    },
+    stack: function(node, data, opts, do_after) {
+      var chart = nv.models.stackedAreaChart()
+        .x(function(d) { return d[0] })
+        .y(function(d) { return d[1] })
+        .useInteractiveGuideline(opts.guide)
+        .showControls(opts.controls)
+        .clipEdge(true);
+      chart.xAxis
+        .axisLabel(opts.xname)
+        .tickFormat(opts.xformat)
+        .showMaxMin(opts.showmaxmin);
+      chart.yAxis
+        .orient("left")
+        .tickFormat(d3.format(opts.yformat || ",.3f"));
+      var colorizer = new Chart.colorizer(), data_ = [];
+      for (var i in data) {
+        data_.push({key:data[i][0], values:data[i][1], color:colorizer.get_color(data[i][0])})
+      }
+      Chart._render(node, data_, chart, do_after);
+    },
+    lines: function(node, data, opts, do_after) {
+      var chart = nv.models.lineChart()
+        .x(function(d) { return d[0] })
+        .y(function(d) { return d[1] })
+        .useInteractiveGuideline(opts.guide)
+        .clipEdge(true);
+      chart.xAxis
+        .axisLabel(opts.xname)
+        .tickFormat(opts.xformat)
+        .rotateLabels(opts.xrotate)
+        .showMaxMin(opts.showmaxmin);
+      chart.yAxis
+        .orient("left")
+        .tickFormat(d3.format(opts.yformat || ",.3f"));
+      var colorizer = new Chart.colorizer(), data_ = [];
+      for (var i in data) {
+        data_.push({key:data[i][0], values:data[i][1], color:colorizer.get_color(data[i][0])})
+      }
+      Chart._render(node, data_, chart, do_after)
+    },
+    histogram: function(node, data, opts) {
+      var chart = nv.models.multiBarChart()
+        .reduceXTicks(true)
+        .showControls(false)
+        .transitionDuration(0)
+        .groupSpacing(0.05);
+      chart
+        .legend.radioButtonMode(true);
+      chart.xAxis
+        .axisLabel("Duration (seconds)")
+        .tickFormat(d3.format(",.2f"));
+      chart.yAxis
+        .axisLabel("Iterations (frequency)")
+        .tickFormat(d3.format("d"));
+      Chart._render(node, data, chart)
+    }
+  };
+
+  return {
+    restrict: "A",
+    scope: { data: "=" },
+    link: function(scope, element, attrs) {
+      scope.$watch("data", function(data) {
+        if (! data) { return console.log("Chart has no data to render!") }
+        if (attrs.widget === "Table") {
+          var ng_class = attrs.lastrowClass ? " ng-class='{"+attrs.lastrowClass+":$last}'" : "";
+          var template = "<table class='striped'><thead>" +
+            "<tr><th ng-repeat='i in data.cols track by $index'>{{i}}<tr>" +
+            "</thead><tbody>" +
+            "<tr" + ng_class + " ng-repeat='row in data.rows track by $index'>" +
+            "<td ng-repeat='i in row track by $index'>{{i}}" +
+            "<tr>" +
+            "</tbody></table>";
+          var el = element.empty().append($compile(template)(scope)).children()[0]
+        } else if (attrs.widget === "TextArea") {
+          var template = "<div style='padding:0 0 5px' ng-repeat='str in data track by $index'>{{str}}</div><div style='height:10px'></div>";
+          var el = element.empty().append($compile(template)(scope)).children()[0]
+        } else {
+
+          var el_chart = element.addClass("chart").css({display:"block"});
+          var el = el_chart.html("<svg></svg>").children()[0];
+
+          var do_after = null;
+
+          if (attrs.widget in {StackedArea:0, Lines:0}) {
+
+            /* Hide widget if not enough data */
+            if ((! data.length) || (data[0].length < 1) || (data[0][1].length < 2)) {
+              return element.empty().css({display:"none"})
+            }
+
+            /* NOTE(amaretskiy): Dirty fix for changing chart width in case
+               if there are too long Y values that overlaps chart box. */
+            var do_after = function(node, chart){
+              var g_box = angular.element(el_chart[0].querySelector(".nv-y.nv-axis"));
+
+              if (g_box && g_box[0] && g_box[0].getBBox) {
+
+                try {
+                  // 30 is padding aroung graphs
+                  var width = g_box[0].getBBox().width + 30;
+                } catch (err) {
+                  // This happens sometimes, just skip silently
+                  return
+                }
+
+                // 890 is chart width (set by CSS)
+                if (typeof width === "number" && width > 890) {
+                  width = (890 * 2) - width;
+                  if (width > 0) {
+                    angular.element(node).css({width:width+"px"});
+                    chart.update()
+                  }
+                }
+              }
+            }
+          }
+          else if (attrs.widget === "Pie") {
+            if (! data.length) {
+              return element.empty().css({display:"none"})
+            }
+          }
+
+          var opts = {
+            xname: attrs.nameX || "",
+            xrotate: attrs.rotateX || 0,
+            yformat: attrs.formatY || ",.3f",
+            controls: attrs.controls === "true",
+            guide: attrs.guide === "true",
+            showmaxmin: attrs.showmaxmin === "true"
+          };
+          if (attrs.formatDateX) {
+            opts.xformat = function(d) { return d3.time.format(attrs.formatDateX)(new Date(d)) }
+          } else {
+            opts.xformat = d3.format(attrs.formatX || "d")
+          }
+          Chart.get_chart(attrs.widget)(el, data, opts, do_after);
+        }
+
+        if (attrs.nameY) {
+          /* NOTE(amaretskiy): Dirty fix for displaying Y-axis label correctly.
+             I believe sometimes NVD3 will allow doing this in normal way */
+          var label_y = angular.element("<div>").addClass("chart-label-y").text(attrs.nameY);
+          angular.element(el).parent().prepend(label_y)
+        }
+
+        if (attrs.description) {
+          var desc_el = angular.element("<div>").addClass(attrs.descriptionClass || "h3").text(attrs.description);
+          angular.element(el).parent().prepend(desc_el)
+        }
+
+        if (attrs.title) {
+          var title_el = angular.element("<div>").addClass(attrs.titleClass || "h2").text(attrs.title);
+          angular.element(el).parent().prepend(title_el)
+        }
+
+        angular.element(el).parent().append(angular.element("<div style='clear:both'>"))
+      });
+    }
+  }
+};
+
+    var controllerFunction = function($scope, $location) {
+        $scope.source = "{\n  \"KeystoneBasic.add_and_remove_user_role\": [\n    {\n      \"args\": {}, \n      \"context\": {\n        \"users\": {\n          \"tenants\": 3, \n          \"users_per_tenant\": 2\n        }\n      }, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {}\n    }\n  ], \n  \"KeystoneBasic.authenticate_user_and_validate_token\": [\n    {\n      \"args\": {}, \n      \"context\": {}, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {\n        \"failure_rate\": {\n          \"max\": 0\n        }\n      }\n    }\n  ], \n  \"KeystoneBasic.create_add_and_list_user_roles\": [\n    {\n      \"args\": {}, \n      \"context\": {\n        \"users\": {\n          \"tenants\": 3, \n          \"users_per_tenant\": 2\n        }\n      }, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 1, \n        \"times\": 2, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {}\n    }\n  ], \n  \"KeystoneBasic.create_and_delete_role\": [\n    {\n      \"args\": {}, \n      \"context\": {}, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 1, \n        \"times\": 2, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {}\n    }\n  ], \n  \"KeystoneBasic.create_and_delete_service\": [\n    {\n      \"args\": {\n        \"description\": \"test_description\", \n        \"service_type\": \"Rally_test_type\"\n      }, \n      \"context\": {}, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {}\n    }\n  ], \n  \"KeystoneBasic.create_and_get_role\": [\n    {\n      \"args\": {}, \n      \"context\": {\n        \"users\": {\n          \"tenants\": 1, \n          \"users_per_tenant\": 1\n        }\n      }, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {\n        \"failure_rate\": {\n          \"max\": 0\n        }\n      }\n    }\n  ], \n  \"KeystoneBasic.create_and_list_services\": [\n    {\n      \"args\": {\n        \"description\": \"test_description\", \n        \"service_type\": \"Rally_test_type\"\n      }, \n      \"context\": {}, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 1, \n        \"times\": 2, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {}\n    }\n  ], \n  \"KeystoneBasic.create_and_list_users\": [\n    {\n      \"args\": {}, \n      \"context\": {}, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {}\n    }\n  ], \n  \"KeystoneBasic.create_and_update_user\": [\n    {\n      \"args\": {\n        \"create_user_kwargs\": {}, \n        \"update_user_kwargs\": {\n          \"enabled\": false\n        }\n      }, \n      \"context\": {\n        \"users\": {\n          \"tenants\": 2, \n          \"users_per_tenant\": 2\n        }\n      }, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {\n        \"failure_rate\": {\n          \"max\": 0\n        }\n      }\n    }\n  ], \n  \"KeystoneBasic.create_delete_user\": [\n    {\n      \"args\": {}, \n      \"context\": {}, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {}\n    }\n  ], \n  \"KeystoneBasic.create_user\": [\n    {\n      \"args\": {}, \n      \"context\": {}, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {}\n    }\n  ], \n  \"KeystoneBasic.create_user_set_enabled_and_delete\": [\n    {\n      \"args\": {\n        \"enabled\": true\n      }, \n      \"context\": {}, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {}\n    }, \n    {\n      \"args\": {\n        \"enabled\": false\n      }, \n      \"context\": {}, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {}\n    }\n  ], \n  \"KeystoneBasic.create_user_update_password\": [\n    {\n      \"args\": {}, \n      \"context\": {}, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {}\n    }\n  ], \n  \"KeystoneBasic.get_entities\": [\n    {\n      \"args\": {}, \n      \"context\": {}, \n      \"hooks\": [], \n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"sla\": {}\n    }\n  ]\n}";
+        $scope.scenarios = [{"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.create_role", 0.13102328777313232], ["keystone_v3.add_role", 0.06377077102661133], ["keystone_v3.revoke_role", 0.13722795248031616]], "iter": [["keystone_v3.create_role", [[1, 0.12581205368041992], [2, 0.15292787551879883], [3, 0.11777019500732422], [4, 0.12758302688598633]]], ["keystone_v3.add_role", [[1, 0.060211896896362305], [2, 0.06686115264892578], [3, 0.0611879825592041], [4, 0.06682205200195312]]], ["keystone_v3.revoke_role", [[1, 0.16850876808166504], [2, 0.11087608337402344], [3, 0.1571669578552246], [4, 0.11236000061035156]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 3, "x": 0.13534903526306152}, {"y": 1, "x": 0.15292787551879883}], "key": "keystone_v3.create_role", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 2, "x": 0.06353652477264404}, {"y": 2, "x": 0.06686115264892578}], "key": "keystone_v3.add_role", "view": "Square Root Choice"}, {"disabled": 2, "values": [{"y": 2, "x": 0.13969242572784424}, {"y": 2, "x": 0.16850876808166504}], "key": "keystone_v3.revoke_role", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 3, "x": 0.12948942184448242}, {"y": 0, "x": 0.14120864868164062}, {"y": 1, "x": 0.15292787551879883}], "key": "keystone_v3.create_role", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 2, "x": 0.06242831548055013}, {"y": 0, "x": 0.06464473406473796}, {"y": 2, "x": 0.06686115264892578}], "key": "keystone_v3.add_role", "view": "Sturges Formula"}, {"disabled": 2, "values": [{"y": 2, "x": 0.13008697827657065}, {"y": 0, "x": 0.14929787317911783}, {"y": 2, "x": 0.16850876808166504}], "key": "keystone_v3.revoke_role", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.12655961513519287}, {"y": 1, "x": 0.13534903526306152}, {"y": 0, "x": 0.14413845539093018}, {"y": 1, "x": 0.15292787551879883}], "key": "keystone_v3.create_role", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 2, "x": 0.061874210834503174}, {"y": 0, "x": 0.06353652477264404}, {"y": 0, "x": 0.06519883871078491}, {"y": 2, "x": 0.06686115264892578}], "key": "keystone_v3.add_role", "view": "Rice Rule"}, {"disabled": 2, "values": [{"y": 2, "x": 0.12528425455093384}, {"y": 0, "x": 0.13969242572784424}, {"y": 0, "x": 0.15410059690475464}, {"y": 2, "x": 0.16850876808166504}], "key": "keystone_v3.revoke_role", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 4], ["errors", 0]], "iter": [["duration", [[1, 0.35471320152282715], [2, 0.3308260440826416], [3, 0.3362610340118408], [4, 0.3068881034851074]]], ["idle_duration", [[1, 0.0], [2, 0.0], [3, 0.0], [4, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 1, "x": 0.3308006525039673}, {"y": 3, "x": 0.35471320152282715}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 1, "x": 0.322829802831014}, {"y": 2, "x": 0.3387715021769206}, {"y": 1, "x": 0.35471320152282715}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 1, "x": 0.31884437799453735}, {"y": 0, "x": 0.3308006525039673}, {"y": 2, "x": 0.3427569270133972}, {"y": 1, "x": 0.35471320152282715}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_role", 0.118, 0.127, 0.145, 0.149, 0.153, 0.131, "100.0%", 4], ["keystone_v3.add_role", 0.06, 0.064, 0.067, 0.067, 0.067, 0.064, "100.0%", 4], ["keystone_v3.revoke_role", 0.111, 0.135, 0.165, 0.167, 0.169, 0.137, "100.0%", 4], ["total", 0.307, 0.334, 0.349, 0.352, 0.355, 0.332, "100.0%", 4]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 4, "load_duration": 0.8907091617584229, "complete_output": [[], [], [], []], "config": "{\n  \"KeystoneBasic.add_and_remove_user_role\": [\n    {\n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {}, \n      \"sla\": {}, \n      \"context\": {\n        \"users\": {\n          \"tenants\": 3, \n          \"users_per_tenant\": 2\n        }\n      }\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "add_and_remove_user_role", "has_output": false, "full_duration": 6.862715005874634, "load_profile": [["parallel iterations", [[0.0, 0], [0.009085233449935913, 1.9220599906613698], [0.018170466899871826, 2], [0.02725570034980774, 2], [0.03634093379974365, 2], [0.045426167249679565, 2], [0.05451140069961548, 2], [0.06359663414955138, 2], [0.0726818675994873, 2], [0.08176710104942322, 2], [0.09085233449935913, 2], [0.09993756794929504, 2], [0.10902280139923096, 2], [0.11810803484916688, 2], [0.12719326829910277, 2], [0.1362785017490387, 2], [0.1453637351989746, 2], [0.15444896864891053, 2], [0.16353420209884645, 2], [0.17261943554878234, 2], [0.18170466899871826, 2], [0.19078990244865418, 2], [0.19987513589859007, 2], [0.208960369348526, 2], [0.2180456027984619, 2], [0.22713083624839783, 2], [0.23621606969833375, 2], [0.24530130314826964, 2], [0.25438653659820554, 2], [0.2634717700481415, 2], [0.2725570034980774, 2], [0.2816422369480133, 2], [0.2907274703979492, 2], [0.2998127038478851, 2], [0.30889793729782106, 2], [0.31798317074775695, 2], [0.3270684041976929, 2], [0.3361536376476288, 1.4915386147740481], [0.3452388710975647, 1], [0.35432410454750063, 1], [0.3634093379974365, 0.04282740531331797], [0.3724945714473724, 0], [0.38157980489730836, 0], [0.39066503834724425, 0], [0.39975027179718015, 0], [0.4088355052471161, 0], [0.417920738697052, 0], [0.42700597214698793, 0], [0.4360912055969238, 0], [0.4451764390468597, 0], [0.45426167249679567, 0], [0.46334690594673156, 0], [0.4724321393966675, 0], [0.4815173728466034, 0], [0.4906026062965393, 0], [0.49968783974647524, 0], [0.5087730731964111, 0], [0.517858306646347, 0], [0.526943540096283, 0], [0.5360287735462189, 0], [0.5451140069961548, 0], [0.5541992404460907, 0], [0.5632844738960266, 1.1538177050362268], [0.5723697073459625, 2], [0.5814549407958984, 2], [0.5905401742458344, 2], [0.5996254076957702, 2], [0.6087106411457062, 2], [0.6177958745956421, 2], [0.626881108045578, 2], [0.6359663414955139, 2], [0.6450515749454498, 2], [0.6541368083953858, 2], [0.6632220418453216, 2], [0.6723072752952576, 2], [0.6813925087451935, 2], [0.6904777421951294, 2], [0.6995629756450653, 2], [0.7086482090950013, 2], [0.7177334425449371, 2], [0.726818675994873, 2], [0.735903909444809, 2], [0.7449891428947448, 2], [0.7540743763446808, 2], [0.7631596097946167, 2], [0.7722448432445526, 2], [0.7813300766944885, 2], [0.7904153101444245, 2], [0.7995005435943603, 2], [0.8085857770442962, 2], [0.8176710104942322, 2], [0.8267562439441681, 2], [0.835841477394104, 2], [0.8449267108440399, 2], [0.8540119442939759, 2], [0.8630971777439117, 2], [0.8721824111938477, 1.5975677573570624], [0.8812676446437836, 1], [0.8903528780937194, 1], [0.8994381115436554, 0.03921568627451499], [0.9085233449935913, 0]]]], "name": "add_and_remove_user_role", "created_at": "2019-18-06T11:16:27", "additive_output": [], "sla": []}, {"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.fetch_token", 0.036414504051208496], ["keystone_v3.validate_token", 0.08593422174453735]], "iter": [["keystone_v3.fetch_token", [[1, 0.03523707389831543], [2, 0.03476405143737793], [3, 0.03826308250427246], [4, 0.037393808364868164]]], ["keystone_v3.validate_token", [[1, 0.07843995094299316], [2, 0.07857799530029297], [3, 0.09395503997802734], [4, 0.09276390075683594]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 2, "x": 0.036513566970825195}, {"y": 2, "x": 0.03826308250427246}], "key": "keystone_v3.fetch_token", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 2, "x": 0.08619749546051025}, {"y": 2, "x": 0.09395503997802734}], "key": "keystone_v3.validate_token", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.03593039512634277}, {"y": 0, "x": 0.03709673881530762}, {"y": 2, "x": 0.03826308250427246}], "key": "keystone_v3.fetch_token", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 2, "x": 0.08361164728800456}, {"y": 0, "x": 0.08878334363301595}, {"y": 2, "x": 0.09395503997802734}], "key": "keystone_v3.validate_token", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.03563880920410156}, {"y": 0, "x": 0.036513566970825195}, {"y": 0, "x": 0.03738832473754883}, {"y": 2, "x": 0.03826308250427246}], "key": "keystone_v3.fetch_token", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 2, "x": 0.08231872320175171}, {"y": 0, "x": 0.08619749546051025}, {"y": 0, "x": 0.0900762677192688}, {"y": 2, "x": 0.09395503997802734}], "key": "keystone_v3.validate_token", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 4], ["errors", 0]], "iter": [["duration", [[1, 0.11381101608276367], [2, 0.1134650707244873], [3, 0.13230609893798828], [4, 0.1302499771118164]]], ["idle_duration", [[1, 0.0], [2, 0.0], [3, 0.0], [4, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 2, "x": 0.12288558483123779}, {"y": 2, "x": 0.13230609893798828}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 2, "x": 0.11974541346232097}, {"y": 0, "x": 0.12602575620015463}, {"y": 2, "x": 0.13230609893798828}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 2, "x": 0.11817532777786255}, {"y": 0, "x": 0.12288558483123779}, {"y": 0, "x": 0.12759584188461304}, {"y": 2, "x": 0.13230609893798828}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.fetch_token", 0.035, 0.036, 0.038, 0.038, 0.038, 0.036, "100.0%", 4], ["keystone_v3.validate_token", 0.078, 0.086, 0.094, 0.094, 0.094, 0.086, "100.0%", 4], ["total", 0.113, 0.122, 0.132, 0.132, 0.132, 0.122, "100.0%", 4]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 4, "load_duration": 0.35852694511413574, "complete_output": [[], [], [], []], "config": "{\n  \"KeystoneBasic.authenticate_user_and_validate_token\": [\n    {\n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {}, \n      \"sla\": {\n        \"failure_rate\": {\n          \"max\": 0\n        }\n      }, \n      \"context\": {}\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "authenticate_user_and_validate_token", "has_output": false, "full_duration": 2.6628639698028564, "load_profile": [["parallel iterations", [[0.0, 0], [0.0036569748401641842, 1.9371514652686024], [0.0073139496803283684, 2], [0.010970924520492552, 2], [0.014627899360656737, 2], [0.018284874200820922, 2], [0.021941849040985104, 2], [0.02559882388114929, 2], [0.029255798721313474, 2], [0.032912773561477655, 2], [0.036569748401641844, 2], [0.040226723241806026, 2], [0.04388369808197021, 2], [0.047540672922134396, 2], [0.05119764776229858, 2], [0.054854622602462766, 2], [0.05851159744262695, 2], [0.06216857228279113, 2], [0.06582554712295531, 2], [0.0694825219631195, 2], [0.07313949680328369, 2], [0.07679647164344787, 2], [0.08045344648361205, 2], [0.08411042132377623, 2], [0.08776739616394041, 2], [0.09142437100410461, 2], [0.09508134584426879, 2], [0.09873832068443297, 2], [0.10239529552459715, 2], [0.10605227036476134, 2], [0.10970924520492553, 2], [0.11336622004508971, 2], [0.1170231948852539, 0.2115087637000887], [0.12068016972541808, 0], [0.12433714456558226, 0], [0.12799411940574645, 0], [0.13165109424591062, 0], [0.13530806908607482, 0], [0.138965043926239, 0], [0.14262201876640318, 0], [0.14627899360656738, 0], [0.14993596844673154, 0], [0.15359294328689574, 0], [0.15724991812705993, 0], [0.1609068929672241, 0], [0.1645638678073883, 0], [0.16822084264755247, 0], [0.17187781748771666, 0], [0.17553479232788083, 0], [0.17919176716804502, 0], [0.18284874200820922, 0], [0.1865057168483734, 0], [0.19016269168853758, 0], [0.19381966652870175, 0], [0.19747664136886595, 0], [0.20113361620903014, 0], [0.2047905910491943, 0], [0.2084475658893585, 0], [0.21210454072952267, 0], [0.21576151556968687, 0], [0.21941849040985106, 0], [0.22307546525001523, 0], [0.22673244009017943, 0.1398953879619793], [0.2303894149303436, 1.9930097564787395], [0.2340463897705078, 2], [0.23770336461067199, 2], [0.24136033945083615, 2], [0.24501731429100035, 2], [0.24867428913116452, 2], [0.2523312639713287, 2], [0.2559882388114929, 2], [0.2596452136516571, 2], [0.26330218849182124, 2], [0.26695916333198544, 2], [0.27061613817214963, 2], [0.27427311301231383, 2], [0.277930087852478, 2], [0.28158706269264216, 2], [0.28524403753280636, 2], [0.28890101237297056, 2], [0.29255798721313475, 2], [0.29621496205329895, 2], [0.2998719368934631, 2], [0.3035289117336273, 2], [0.3071858865737915, 2], [0.3108428614139557, 2], [0.31449983625411987, 2], [0.318156811094284, 2], [0.3218137859344482, 2], [0.3254707607746124, 2], [0.3291277356147766, 2], [0.3327847104549408, 2], [0.33644168529510493, 2], [0.3400986601352691, 2], [0.3437556349754333, 2], [0.3474126098155975, 2], [0.35106958465576166, 2], [0.35472655949592585, 2], [0.35838353433609005, 1.6238546750984504], [0.36204050917625424, 0.03921568627452064], [0.36569748401641844, 0]]]], "name": "authenticate_user_and_validate_token", "created_at": "2019-18-06T11:16:36", "additive_output": [], "sla": [{"criterion": "failure_rate", "detail": "Failure rate criteria 0.00% <= 0.00% <= 0.00% - Passed", "success": true}]}, {"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.create_role", 0.11088407039642334], ["keystone_v3.add_role", 0.0559694766998291], ["keystone_v3.list_roles", 0.06258606910705566]], "iter": [["keystone_v3.create_role", [[1, 0.11263108253479004], [2, 0.10913705825805664]]], ["keystone_v3.add_role", [[1, 0.057023048400878906], [2, 0.0549159049987793]]], ["keystone_v3.list_roles", [[1, 0.06122398376464844], [2, 0.06394815444946289]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 1, "x": 0.11088407039642334}, {"y": 1, "x": 0.11263108253479004}], "key": "keystone_v3.create_role", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 1, "x": 0.0559694766998291}, {"y": 1, "x": 0.057023048400878906}], "key": "keystone_v3.add_role", "view": "Square Root Choice"}, {"disabled": 2, "values": [{"y": 1, "x": 0.06258606910705566}, {"y": 1, "x": 0.06394815444946289}], "key": "keystone_v3.list_roles", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 1, "x": 0.11088407039642334}, {"y": 1, "x": 0.11263108253479004}], "key": "keystone_v3.create_role", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 1, "x": 0.0559694766998291}, {"y": 1, "x": 0.057023048400878906}], "key": "keystone_v3.add_role", "view": "Sturges Formula"}, {"disabled": 2, "values": [{"y": 1, "x": 0.06258606910705566}, {"y": 1, "x": 0.06394815444946289}], "key": "keystone_v3.list_roles", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 1, "x": 0.11030173301696777}, {"y": 0, "x": 0.1114664077758789}, {"y": 1, "x": 0.11263108253479004}], "key": "keystone_v3.create_role", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 1, "x": 0.0556182861328125}, {"y": 0, "x": 0.0563206672668457}, {"y": 1, "x": 0.057023048400878906}], "key": "keystone_v3.add_role", "view": "Rice Rule"}, {"disabled": 2, "values": [{"y": 1, "x": 0.062132040659586586}, {"y": 0, "x": 0.06304009755452473}, {"y": 1, "x": 0.06394815444946289}], "key": "keystone_v3.list_roles", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 2], ["errors", 0]], "iter": [["duration", [[1, 0.2310481071472168], [2, 0.22809696197509766]]], ["idle_duration", [[1, 0.0], [2, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 1, "x": 0.22957253456115723}, {"y": 1, "x": 0.2310481071472168}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 1, "x": 0.22957253456115723}, {"y": 1, "x": 0.2310481071472168}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 1, "x": 0.2290806770324707}, {"y": 0, "x": 0.23006439208984375}, {"y": 1, "x": 0.2310481071472168}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_role", 0.109, 0.111, 0.112, 0.112, 0.113, 0.111, "100.0%", 2], ["keystone_v3.add_role", 0.055, 0.056, 0.057, 0.057, 0.057, 0.056, "100.0%", 2], ["keystone_v3.list_roles", 0.061, 0.063, 0.064, 0.064, 0.064, 0.063, "100.0%", 2], ["total", 0.228, 0.23, 0.231, 0.231, 0.231, 0.23, "100.0%", 2]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 2, "load_duration": 0.6119129657745361, "complete_output": [[], []], "config": "{\n  \"KeystoneBasic.create_add_and_list_user_roles\": [\n    {\n      \"runner\": {\n        \"concurrency\": 1, \n        \"times\": 2, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {}, \n      \"sla\": {}, \n      \"context\": {\n        \"users\": {\n          \"tenants\": 3, \n          \"users_per_tenant\": 2\n        }\n      }\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "create_add_and_list_user_roles", "has_output": false, "full_duration": 6.700667858123779, "load_profile": [["parallel iterations", [[0.0, 0], [0.006241512250900269, 1.0], [0.012483024501800537, 1], [0.018724536752700804, 1], [0.024966049003601075, 1], [0.031207561254501345, 1], [0.03744907350540161, 1], [0.04369058575630188, 1], [0.04993209800720215, 1], [0.05617361025810242, 1], [0.06241512250900269, 1], [0.06865663475990295, 1], [0.07489814701080322, 1], [0.0811396592617035, 1], [0.08738117151260376, 1], [0.09362268376350404, 1], [0.0998641960144043, 1], [0.10610570826530456, 1], [0.11234722051620484, 1], [0.1185887327671051, 1], [0.12483024501800538, 1], [0.13107175726890563, 1], [0.1373132695198059, 1], [0.14355478177070619, 1], [0.14979629402160644, 1], [0.1560378062725067, 1], [0.162279318523407, 1], [0.16852083077430727, 1], [0.17476234302520752, 1], [0.1810038552761078, 1], [0.18724536752700807, 1], [0.19348687977790832, 1], [0.1997283920288086, 1], [0.20596990427970888, 1], [0.21221141653060913, 1], [0.2184529287815094, 1], [0.22469444103240968, 1], [0.23093595328330993, 1], [0.2371774655342102, 0.017969020871614807], [0.24341897778511049, 0], [0.24966049003601076, 0], [0.255902002286911, 0], [0.26214351453781126, 0], [0.26838502678871157, 0], [0.2746265390396118, 0], [0.28086805129051207, 0], [0.28710956354141237, 0], [0.2933510757923126, 0], [0.29959258804321287, 0], [0.3058341002941132, 0], [0.3120756125450134, 0], [0.31831712479591373, 0], [0.324558637046814, 0], [0.33080014929771423, 0], [0.33704166154861454, 0], [0.3432831737995148, 0], [0.34952468605041503, 0], [0.35576619830131534, 0], [0.3620077105522156, 0], [0.36824922280311584, 0], [0.37449073505401614, 0], [0.3807322473049164, 0], [0.38697375955581664, 0.5059279913970681], [0.39321527180671695, 1], [0.3994567840576172, 1], [0.40569829630851745, 1], [0.41193980855941775, 1], [0.418181320810318, 1], [0.42442283306121825, 1], [0.43066434531211856, 1], [0.4369058575630188, 1], [0.44314736981391906, 1], [0.44938888206481936, 1], [0.4556303943157196, 1], [0.46187190656661986, 1], [0.46811341881752017, 1], [0.4743549310684204, 1], [0.48059644331932067, 1], [0.48683795557022097, 1], [0.4930794678211212, 1], [0.4993209800720215, 1], [0.5055624923229217, 1], [0.511804004573822, 1], [0.5180455168247223, 1], [0.5242870290756225, 1], [0.5305285413265228, 1], [0.5367700535774231, 1], [0.5430115658283233, 1], [0.5492530780792236, 1], [0.5554945903301239, 1], [0.5617361025810241, 1], [0.5679776148319244, 1], [0.5742191270828247, 1], [0.5804606393337249, 1], [0.5867021515846252, 1], [0.5929436638355255, 1], [0.5991851760864257, 1], [0.605426688337326, 1], [0.6116682005882264, 1], [0.6179097128391267, 0.039215686274504453], [0.6241512250900269, 0]]]], "name": "create_add_and_list_user_roles", "created_at": "2019-18-06T11:16:40", "additive_output": [], "sla": []}, {"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.create_role", 0.11296749114990234], ["keystone_v3.delete_role", 0.10338997840881348]], "iter": [["keystone_v3.create_role", [[1, 0.09968304634094238], [2, 0.1262519359588623]]], ["keystone_v3.delete_role", [[1, 0.11152291297912598], [2, 0.09525704383850098]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 1, "x": 0.11296749114990234}, {"y": 1, "x": 0.1262519359588623}], "key": "keystone_v3.create_role", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 1, "x": 0.10338997840881348}, {"y": 1, "x": 0.11152291297912598}], "key": "keystone_v3.delete_role", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 1, "x": 0.11296749114990234}, {"y": 1, "x": 0.1262519359588623}], "key": "keystone_v3.create_role", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 1, "x": 0.10338997840881348}, {"y": 1, "x": 0.11152291297912598}], "key": "keystone_v3.delete_role", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 1, "x": 0.10853934288024902}, {"y": 0, "x": 0.11739563941955566}, {"y": 1, "x": 0.1262519359588623}], "key": "keystone_v3.create_role", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 1, "x": 0.1006790002187093}, {"y": 0, "x": 0.10610095659891765}, {"y": 1, "x": 0.11152291297912598}], "key": "keystone_v3.delete_role", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 2], ["errors", 0]], "iter": [["duration", [[1, 0.2113361358642578], [2, 0.22158598899841309]]], ["idle_duration", [[1, 0.0], [2, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 1, "x": 0.21646106243133545}, {"y": 1, "x": 0.22158598899841309}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 1, "x": 0.21646106243133545}, {"y": 1, "x": 0.22158598899841309}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 1, "x": 0.2147527535756429}, {"y": 0, "x": 0.21816937128702799}, {"y": 1, "x": 0.22158598899841309}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_role", 0.1, 0.113, 0.124, 0.125, 0.126, 0.113, "100.0%", 2], ["keystone_v3.delete_role", 0.095, 0.103, 0.11, 0.111, 0.112, 0.103, "100.0%", 2], ["total", 0.211, 0.216, 0.221, 0.221, 0.222, 0.216, "100.0%", 2]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 2, "load_duration": 0.5998170375823975, "complete_output": [[], []], "config": "{\n  \"KeystoneBasic.create_and_delete_role\": [\n    {\n      \"runner\": {\n        \"concurrency\": 1, \n        \"times\": 2, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {}, \n      \"sla\": {}, \n      \"context\": {}\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "create_and_delete_role", "has_output": false, "full_duration": 2.6125741004943848, "load_profile": [["parallel iterations", [[0.0, 0], [0.006118133783340454, 1.0], [0.012236267566680907, 1], [0.018354401350021362, 1], [0.024472535133361815, 1], [0.030590668916702268, 1], [0.036708802700042724, 1], [0.04282693648338318, 1], [0.04894507026672363, 1], [0.05506320405006408, 1], [0.061181337833404535, 1], [0.06729947161674499, 1], [0.07341760540008545, 1], [0.0795357391834259, 1], [0.08565387296676635, 1], [0.0917720067501068, 1], [0.09789014053344726, 1], [0.10400827431678772, 1], [0.11012640810012816, 1], [0.11624454188346862, 1], [0.12236267566680907, 1], [0.12848080945014953, 1], [0.13459894323348998, 1], [0.14071707701683042, 1], [0.1468352108001709, 1], [0.15295334458351134, 1], [0.1590714783668518, 1], [0.16518961215019226, 1], [0.1713077459335327, 1], [0.17742587971687315, 1], [0.1835440135002136, 1], [0.18966214728355407, 1], [0.19578028106689452, 1], [0.20189841485023496, 1], [0.20801654863357544, 1], [0.21413468241691588, 0.5425816675865341], [0.22025281620025633, 0], [0.22637094998359678, 0], [0.23248908376693725, 0], [0.2386072175502777, 0], [0.24472535133361814, 0], [0.2508434851169586, 0], [0.25696161890029906, 0], [0.26307975268363953, 0], [0.26919788646697995, 0], [0.2753160202503204, 0], [0.28143415403366084, 0], [0.2875522878170013, 0], [0.2936704216003418, 0], [0.2997885553836822, 0], [0.3059066891670227, 0], [0.31202482295036316, 0], [0.3181429567337036, 0], [0.32426109051704405, 0], [0.3303792243003845, 0], [0.33649735808372494, 0], [0.3426154918670654, 0], [0.3487336256504059, 0], [0.3548517594337463, 0], [0.3609698932170868, 0], [0.3670880270004272, 0], [0.37320616078376767, 0], [0.37932429456710814, 0.17868945365344163], [0.38544242835044856, 1], [0.39156056213378904, 1], [0.3976786959171295, 1], [0.40379682970046993, 1], [0.4099149634838104, 1], [0.4160330972671509, 1], [0.4221512310504913, 1], [0.42826936483383177, 1], [0.4343874986171722, 1], [0.44050563240051266, 1], [0.44662376618385313, 1], [0.45274189996719355, 1], [0.458860033750534, 1], [0.4649781675338745, 1], [0.4710963013172149, 1], [0.4772144351005554, 1], [0.48333256888389586, 1], [0.4894507026672363, 1], [0.49556883645057676, 1], [0.5016869702339172, 1], [0.5078051040172576, 1], [0.5139232378005981, 1], [0.5200413715839386, 1], [0.5261595053672791, 1], [0.5322776391506194, 1], [0.5383957729339599, 1], [0.5445139067173004, 1], [0.5506320405006409, 1], [0.5567501742839813, 1], [0.5628683080673217, 1], [0.5689864418506622, 1], [0.5751045756340026, 1], [0.5812227094173431, 1], [0.5873408432006836, 1], [0.5934589769840241, 1], [0.5995771107673644, 1], [0.6056952445507049, 0.03921568627452345], [0.6118133783340454, 0]]]], "name": "create_and_delete_role", "created_at": "2019-18-06T11:16:49", "additive_output": [], "sla": []}, {"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.create_service", 0.12937498092651367], ["keystone_v3.delete_service", 0.08618247509002686]], "iter": [["keystone_v3.create_service", [[1, 0.12299299240112305], [2, 0.15040087699890137], [3, 0.1151580810546875], [4, 0.12894797325134277]]], ["keystone_v3.delete_service", [[1, 0.09785008430480957], [2, 0.0966799259185791], [3, 0.06592893600463867], [4, 0.08427095413208008]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 3, "x": 0.13277947902679443}, {"y": 1, "x": 0.15040087699890137}], "key": "keystone_v3.create_service", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 1, "x": 0.08188951015472412}, {"y": 3, "x": 0.09785008430480957}], "key": "keystone_v3.delete_service", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.1269056797027588}, {"y": 1, "x": 0.13865327835083008}, {"y": 1, "x": 0.15040087699890137}], "key": "keystone_v3.create_service", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 1, "x": 0.0765693187713623}, {"y": 1, "x": 0.08720970153808594}, {"y": 2, "x": 0.09785008430480957}], "key": "keystone_v3.delete_service", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.12396878004074097}, {"y": 1, "x": 0.13277947902679443}, {"y": 0, "x": 0.1415901780128479}, {"y": 1, "x": 0.15040087699890137}], "key": "keystone_v3.create_service", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 1, "x": 0.0739092230796814}, {"y": 0, "x": 0.08188951015472412}, {"y": 1, "x": 0.08986979722976685}, {"y": 2, "x": 0.09785008430480957}], "key": "keystone_v3.delete_service", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 4], ["errors", 0]], "iter": [["duration", [[1, 0.2210221290588379], [2, 0.24723100662231445], [3, 0.1811540126800537], [4, 0.21329689025878906]]], ["idle_duration", [[1, 0.0], [2, 0.0], [3, 0.0], [4, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 2, "x": 0.21419250965118408}, {"y": 2, "x": 0.24723100662231445}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 1, "x": 0.20317967732747397}, {"y": 2, "x": 0.2252053419748942}, {"y": 1, "x": 0.24723100662231445}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 1, "x": 0.1976732611656189}, {"y": 1, "x": 0.21419250965118408}, {"y": 1, "x": 0.23071175813674927}, {"y": 1, "x": 0.24723100662231445}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_service", 0.115, 0.126, 0.144, 0.147, 0.15, 0.129, "100.0%", 4], ["keystone_v3.delete_service", 0.066, 0.09, 0.097, 0.098, 0.098, 0.086, "100.0%", 4], ["total", 0.181, 0.217, 0.239, 0.243, 0.247, 0.216, "100.0%", 4]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 4, "load_duration": 0.5947620868682861, "complete_output": [[], [], [], []], "config": "{\n  \"KeystoneBasic.create_and_delete_service\": [\n    {\n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {\n        \"description\": \"test_description\", \n        \"service_type\": \"Rally_test_type\"\n      }, \n      \"sla\": {}, \n      \"context\": {}\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "create_and_delete_service", "has_output": false, "full_duration": 2.785949945449829, "load_profile": [["parallel iterations", [[0.0, 0], [0.006066573286056519, 1.0], [0.012133146572113038, 1.8158012296661554], [0.01819971985816956, 2], [0.024266293144226077, 2], [0.030332866430282594, 2], [0.03639943971633912, 2], [0.042466013002395636, 2], [0.048532586288452154, 2], [0.05459915957450867, 2], [0.06066573286056519, 2], [0.0667323061466217, 2], [0.07279887943267824, 2], [0.07886545271873475, 2], [0.08493202600479127, 2], [0.09099859929084779, 2], [0.09706517257690431, 2], [0.10313174586296082, 2], [0.10919831914901734, 2], [0.11526489243507386, 2], [0.12133146572113038, 2], [0.1273980390071869, 2], [0.1334646122932434, 2], [0.13953118557929994, 2], [0.14559775886535647, 2], [0.15166433215141298, 2], [0.1577309054374695, 2], [0.163797478723526, 2], [0.16986405200958254, 2], [0.17593062529563905, 2], [0.18199719858169558, 2], [0.18806377186775208, 2], [0.19413034515380861, 2], [0.20019691843986515, 2], [0.20626349172592165, 2], [0.21233006501197818, 2], [0.21839663829803468, 2], [0.22446321158409122, 1.4327798638545526], [0.23052978487014772, 1], [0.23659635815620425, 1], [0.24266293144226075, 1], [0.24872950472831729, 1], [0.2547960780143738, 0.9371897859625526], [0.26086265130043035, 0], [0.2669292245864868, 0], [0.27299579787254336, 0], [0.2790623711585999, 0], [0.2851289444446564, 0], [0.29119551773071295, 0], [0.2972620910167694, 0], [0.30332866430282596, 0], [0.3093952375888825, 0], [0.315461810874939, 0], [0.3215283841609955, 0], [0.327594957447052, 0], [0.33366153073310856, 0], [0.3397281040191651, 0], [0.3457946773052216, 0], [0.3518612505912781, 0], [0.3579278238773346, 0], [0.36399439716339116, 0.29825664420124604], [0.3700609704494477, 1], [0.37612754373550417, 1], [0.3821941170215607, 1.1201535657269626], [0.38826069030761723, 2], [0.39432726359367376, 2], [0.4003938368797303, 2], [0.40646041016578677, 2], [0.4125269834518433, 2], [0.41859355673789983, 2], [0.42466013002395636, 2], [0.43072670331001284, 2], [0.43679327659606937, 2], [0.4428598498821259, 2], [0.44892642316818243, 2], [0.45499299645423896, 2], [0.46105956974029544, 2], [0.46712614302635197, 2], [0.4731927163124085, 2], [0.47925928959846503, 2], [0.4853258628845215, 2], [0.49139243617057804, 2], [0.49745900945663457, 2], [0.5035255827426911, 2], [0.5095921560287476, 2], [0.5156587293148042, 2], [0.5217253026008607, 2], [0.5277918758869171, 2], [0.5338584491729736, 2], [0.5399250224590302, 2], [0.5459915957450867, 1.5627545293421747], [0.5520581690311432, 1], [0.5581247423171998, 1], [0.5641913156032563, 1], [0.5702578888893128, 1], [0.5763244621753694, 1], [0.5823910354614259, 1], [0.5884576087474823, 1], [0.5945241820335389, 1], [0.6005907553195954, 0.0392156862745045], [0.6066573286056519, 0]]]], "name": "create_and_delete_service", "created_at": "2019-18-06T11:16:53", "additive_output": [], "sla": []}, {"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.create_role", 0.11433643102645874], ["keystone_v3.get_role", 0.027029991149902344]], "iter": [["keystone_v3.create_role", [[1, 0.12738585472106934], [2, 0.09824085235595703], [3, 0.12551379203796387], [4, 0.10620522499084473]]], ["keystone_v3.get_role", [[1, 0.03626608848571777], [2, 0.025506973266601562], [3, 0.022979021072387695], [4, 0.023367881774902344]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 2, "x": 0.11281335353851318}, {"y": 2, "x": 0.12738585472106934}], "key": "keystone_v3.create_role", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 3, "x": 0.029622554779052734}, {"y": 1, "x": 0.03626608848571777}], "key": "keystone_v3.get_role", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.1079558531443278}, {"y": 0, "x": 0.11767085393269856}, {"y": 2, "x": 0.12738585472106934}], "key": "keystone_v3.create_role", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 3, "x": 0.027408043543497723}, {"y": 0, "x": 0.03183706601460775}, {"y": 1, "x": 0.03626608848571777}], "key": "keystone_v3.get_role", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 1, "x": 0.10552710294723511}, {"y": 1, "x": 0.11281335353851318}, {"y": 0, "x": 0.12009960412979126}, {"y": 2, "x": 0.12738585472106934}], "key": "keystone_v3.create_role", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 3, "x": 0.026300787925720215}, {"y": 0, "x": 0.029622554779052734}, {"y": 0, "x": 0.032944321632385254}, {"y": 1, "x": 0.03626608848571777}], "key": "keystone_v3.get_role", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 4], ["errors", 0]], "iter": [["duration", [[1, 0.1638040542602539], [2, 0.12389898300170898], [3, 0.14856910705566406], [4, 0.129655122756958]]], ["idle_duration", [[1, 0.0], [2, 0.0], [3, 0.0], [4, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 2, "x": 0.14385151863098145}, {"y": 2, "x": 0.1638040542602539}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 2, "x": 0.13720067342122397}, {"y": 1, "x": 0.15050236384073892}, {"y": 1, "x": 0.1638040542602539}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 2, "x": 0.13387525081634521}, {"y": 0, "x": 0.14385151863098145}, {"y": 1, "x": 0.15382778644561768}, {"y": 1, "x": 0.1638040542602539}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_role", 0.098, 0.116, 0.127, 0.127, 0.127, 0.114, "100.0%", 4], ["keystone_v3.get_role", 0.023, 0.024, 0.033, 0.035, 0.036, 0.027, "100.0%", 4], ["total", 0.124, 0.139, 0.159, 0.162, 0.164, 0.141, "100.0%", 4]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 4, "load_duration": 0.41297006607055664, "complete_output": [[], [], [], []], "config": "{\n  \"KeystoneBasic.create_and_get_role\": [\n    {\n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {}, \n      \"sla\": {\n        \"failure_rate\": {\n          \"max\": 0\n        }\n      }, \n      \"context\": {\n        \"users\": {\n          \"tenants\": 1, \n          \"users_per_tenant\": 1\n        }\n      }\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "create_and_get_role", "has_output": false, "full_duration": 3.656263828277588, "load_profile": [["parallel iterations", [[0.0, 0], [0.004212294673919678, 1.9185516774381082], [0.008424589347839356, 2], [0.012636884021759033, 2], [0.016849178695678712, 2], [0.02106147336959839, 2], [0.025273768043518066, 2], [0.029486062717437745, 2], [0.033698357391357424, 2], [0.0379106520652771, 2], [0.04212294673919678, 2], [0.04633524141311646, 2], [0.05054753608703613, 2], [0.054759830760955815, 2], [0.05897212543487549, 2], [0.06318442010879517, 2], [0.06739671478271485, 2], [0.07160900945663452, 2], [0.0758213041305542, 2], [0.08003359880447389, 2], [0.08424589347839356, 2], [0.08845818815231324, 2], [0.09267048282623291, 2], [0.09688277750015259, 2], [0.10109507217407226, 2], [0.10530736684799195, 2], [0.10951966152191163, 2], [0.1137319561958313, 2], [0.11794425086975098, 2], [0.12215654554367066, 2], [0.12636884021759034, 1.4951034898574251], [0.13058113489151002, 1], [0.1347934295654297, 1], [0.13900572423934937, 1], [0.14321801891326905, 1], [0.14743031358718872, 1], [0.1516426082611084, 1], [0.15585490293502807, 1], [0.16006719760894778, 1], [0.16427949228286745, 0.8871308729759078], [0.16849178695678713, 0], [0.1727040816307068, 0], [0.17691637630462648, 0], [0.18112867097854615, 0], [0.18534096565246583, 0], [0.1895532603263855, 0], [0.19376555500030518, 0], [0.19797784967422485, 0], [0.20219014434814453, 0], [0.20640243902206423, 0], [0.2106147336959839, 0], [0.21482702836990358, 0], [0.21903932304382326, 0], [0.22325161771774293, 0], [0.2274639123916626, 0], [0.23167620706558228, 0], [0.23588850173950196, 0], [0.24010079641342164, 0], [0.2443130910873413, 0.9878722259091884], [0.24852538576126101, 1], [0.2527376804351807, 1], [0.25694997510910034, 1], [0.26116226978302004, 1], [0.2653745644569397, 1], [0.2695868591308594, 1], [0.2737991538047791, 1], [0.27801144847869874, 1], [0.28222374315261844, 1], [0.2864360378265381, 1.7409487594169615], [0.2906483325004578, 2], [0.29486062717437744, 2], [0.29907292184829715, 2], [0.3032852165222168, 2], [0.3074975111961365, 2], [0.31170980587005614, 2], [0.31592210054397585, 2], [0.32013439521789555, 2], [0.3243466898918152, 2], [0.3285589845657349, 2], [0.33277127923965455, 2], [0.33698357391357425, 2], [0.3411958685874939, 2], [0.3454081632614136, 2], [0.34962045793533325, 2], [0.35383275260925295, 2], [0.3580450472831726, 2], [0.3622573419570923, 2], [0.366469636631012, 2], [0.37068193130493166, 2], [0.37489422597885136, 2], [0.379106520652771, 2], [0.3833188153266907, 2], [0.38753111000061036, 2], [0.39174340467453006, 1.2824776799333801], [0.3959556993484497, 1], [0.4001679940223694, 1], [0.40438028869628906, 1], [0.40859258337020876, 1], [0.41280487804412846, 1], [0.4170171727180481, 0.039215686274498666], [0.42122946739196776, 0]]]], "name": "create_and_get_role", "created_at": "2019-18-06T11:16:58", "additive_output": [], "sla": [{"criterion": "failure_rate", "detail": "Failure rate criteria 0.00% <= 0.00% <= 0.00% - Passed", "success": true}]}, {"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.create_service", 0.10960757732391357], ["keystone_v3.list_services", 0.03279149532318115]], "iter": [["keystone_v3.create_service", [[1, 0.11440110206604004], [2, 0.10481405258178711]]], ["keystone_v3.list_services", [[1, 0.032431840896606445], [2, 0.03315114974975586]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 1, "x": 0.10960757732391357}, {"y": 1, "x": 0.11440110206604004}], "key": "keystone_v3.create_service", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 1, "x": 0.03279149532318115}, {"y": 1, "x": 0.03315114974975586}], "key": "keystone_v3.list_services", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 1, "x": 0.10960757732391357}, {"y": 1, "x": 0.11440110206604004}], "key": "keystone_v3.create_service", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 1, "x": 0.03279149532318115}, {"y": 1, "x": 0.03315114974975586}], "key": "keystone_v3.list_services", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 1, "x": 0.10800973574320476}, {"y": 0, "x": 0.11120541890462239}, {"y": 1, "x": 0.11440110206604004}], "key": "keystone_v3.create_service", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 1, "x": 0.032671610514322914}, {"y": 0, "x": 0.03291138013203939}, {"y": 1, "x": 0.03315114974975586}], "key": "keystone_v3.list_services", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 2], ["errors", 0]], "iter": [["duration", [[1, 0.14706206321716309], [2, 0.13808894157409668]]], ["idle_duration", [[1, 0.0], [2, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 1, "x": 0.14257550239562988}, {"y": 1, "x": 0.14706206321716309}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 1, "x": 0.14257550239562988}, {"y": 1, "x": 0.14706206321716309}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 1, "x": 0.1410799821217855}, {"y": 0, "x": 0.14407102266947427}, {"y": 1, "x": 0.14706206321716309}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_service", 0.105, 0.11, 0.113, 0.114, 0.114, 0.11, "100.0%", 2], ["keystone_v3.list_services", 0.032, 0.033, 0.033, 0.033, 0.033, 0.033, "100.0%", 2], ["total", 0.138, 0.143, 0.146, 0.147, 0.147, 0.143, "100.0%", 2]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 2, "load_duration": 0.39193296432495117, "complete_output": [[], []], "config": "{\n  \"KeystoneBasic.create_and_list_services\": [\n    {\n      \"runner\": {\n        \"concurrency\": 1, \n        \"times\": 2, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {\n        \"description\": \"test_description\", \n        \"service_type\": \"Rally_test_type\"\n      }, \n      \"sla\": {}, \n      \"context\": {}\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "create_and_list_services", "has_output": false, "full_duration": 3.539569139480591, "load_profile": [["parallel iterations", [[0.0, 0], [0.003997716236114502, 1.0], [0.007995432472229004, 1], [0.011993148708343507, 1], [0.01599086494445801, 1], [0.01998858118057251, 1], [0.023986297416687015, 1], [0.027984013652801516, 1], [0.03198172988891602, 1], [0.03597944612503052, 1], [0.03997716236114502, 1], [0.04397487859725952, 1], [0.04797259483337403, 1], [0.05197031106948853, 1], [0.05596802730560303, 1], [0.059965743541717534, 1], [0.06396345977783204, 1], [0.06796117601394654, 1], [0.07195889225006104, 1], [0.07595660848617554, 1], [0.07995432472229004, 1], [0.08395204095840454, 1], [0.08794975719451904, 1], [0.09194747343063354, 1], [0.09594518966674806, 1], [0.09994290590286256, 1], [0.10394062213897706, 1], [0.10793833837509156, 1], [0.11193605461120607, 1], [0.11593377084732057, 1], [0.11993148708343507, 1], [0.12392920331954957, 1], [0.12792691955566407, 1], [0.13192463579177857, 1], [0.13592235202789307, 1], [0.13992006826400757, 1], [0.14391778450012208, 1], [0.14791550073623658, 0.7865187350308352], [0.15191321697235108, 0], [0.15591093320846558, 0], [0.15990864944458008, 0], [0.16390636568069458, 0], [0.16790408191680908, 0], [0.17190179815292359, 0], [0.1758995143890381, 0], [0.1798972306251526, 0], [0.1838949468612671, 0], [0.1878926630973816, 0], [0.19189037933349612, 0], [0.19588809556961062, 0], [0.19988581180572512, 0], [0.20388352804183962, 0], [0.20788124427795412, 0], [0.21187896051406863, 0], [0.21587667675018313, 0], [0.21987439298629763, 0], [0.22387210922241213, 0], [0.22786982545852663, 0], [0.23186754169464113, 0], [0.23586525793075563, 0], [0.23986297416687014, 0], [0.24386069040298464, 0], [0.24785840663909914, 0], [0.25185612287521364, 0], [0.25585383911132814, 0.5027411256250264], [0.25985155534744264, 1], [0.26384927158355714, 1], [0.26784698781967164, 1], [0.27184470405578615, 1], [0.27584242029190065, 1], [0.27984013652801515, 1], [0.28383785276412965, 1], [0.28783556900024415, 1], [0.29183328523635865, 1], [0.29583100147247315, 1], [0.29982871770858766, 1], [0.30382643394470216, 1], [0.30782415018081666, 1], [0.31182186641693116, 1], [0.31581958265304566, 1], [0.31981729888916016, 1], [0.32381501512527466, 1], [0.32781273136138916, 1], [0.33181044759750367, 1], [0.33580816383361817, 1], [0.33980588006973267, 1], [0.34380359630584717, 1], [0.34780131254196167, 1], [0.3517990287780762, 1], [0.3557967450141907, 1], [0.3597944612503052, 1], [0.3637921774864197, 1], [0.3677898937225342, 1], [0.3717876099586487, 1], [0.3757853261947632, 1], [0.3797830424308777, 1], [0.38378075866699224, 1], [0.38777847490310674, 1], [0.39177619113922124, 1], [0.39577390737533574, 0.03921568627449727], [0.3997716236114502, 0]]]], "name": "create_and_list_services", "created_at": "2019-18-06T11:17:02", "additive_output": [], "sla": []}, {"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.create_user", 0.21420294046401978], ["keystone_v3.list_users", 0.04209858179092407]], "iter": [["keystone_v3.create_user", [[1, 0.20053791999816895], [2, 0.2295980453491211], [3, 0.22318792343139648], [4, 0.20348787307739258]]], ["keystone_v3.list_users", [[1, 0.041192054748535156], [2, 0.038329124450683594], [3, 0.04996299743652344], [4, 0.0389101505279541]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 2, "x": 0.21506798267364502}, {"y": 2, "x": 0.2295980453491211}], "key": "keystone_v3.create_user", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 3, "x": 0.044146060943603516}, {"y": 1, "x": 0.04996299743652344}], "key": "keystone_v3.list_users", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.21022462844848633}, {"y": 0, "x": 0.2199113368988037}, {"y": 2, "x": 0.2295980453491211}], "key": "keystone_v3.create_user", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 3, "x": 0.04220708211263021}, {"y": 0, "x": 0.04608503977457682}, {"y": 1, "x": 0.04996299743652344}], "key": "keystone_v3.list_users", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.20780295133590698}, {"y": 0, "x": 0.21506798267364502}, {"y": 0, "x": 0.22233301401138306}, {"y": 2, "x": 0.2295980453491211}], "key": "keystone_v3.create_user", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 3, "x": 0.041237592697143555}, {"y": 0, "x": 0.044146060943603516}, {"y": 0, "x": 0.04705452919006348}, {"y": 1, "x": 0.04996299743652344}], "key": "keystone_v3.list_users", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 4], ["errors", 0]], "iter": [["duration", [[1, 0.27349114418029785], [2, 0.31269407272338867], [3, 0.30980801582336426], [4, 0.28408384323120117]]], ["idle_duration", [[1, 0.0], [2, 0.0], [3, 0.0], [4, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 2, "x": 0.29309260845184326}, {"y": 2, "x": 0.31269407272338867}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 2, "x": 0.2865587870279948}, {"y": 0, "x": 0.2996264298756917}, {"y": 2, "x": 0.31269407272338867}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 1, "x": 0.28329187631607056}, {"y": 1, "x": 0.29309260845184326}, {"y": 0, "x": 0.30289334058761597}, {"y": 2, "x": 0.31269407272338867}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_user", 0.201, 0.213, 0.228, 0.229, 0.23, 0.214, "100.0%", 4], ["keystone_v3.list_users", 0.038, 0.04, 0.047, 0.049, 0.05, 0.042, "100.0%", 4], ["total", 0.273, 0.297, 0.312, 0.312, 0.313, 0.295, "100.0%", 4]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 4, "load_duration": 0.7267160415649414, "complete_output": [[], [], [], []], "config": "{\n  \"KeystoneBasic.create_and_list_users\": [\n    {\n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {}, \n      \"sla\": {}, \n      \"context\": {}\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "create_and_list_users", "has_output": false, "full_duration": 4.841434001922607, "load_profile": [["parallel iterations", [[0.0, 0], [0.007412503623962402, 1.0], [0.014825007247924803, 1.8482900656814638], [0.022237510871887203, 2], [0.029650014495849607, 2], [0.03706251811981201, 2], [0.04447502174377441, 2], [0.05188752536773681, 2], [0.059300028991699213, 2], [0.06671253261566161, 2], [0.07412503623962402, 2], [0.08153753986358642, 2], [0.08895004348754881, 2], [0.09636254711151122, 2], [0.10377505073547362, 2], [0.11118755435943603, 2], [0.11860005798339843, 2], [0.12601256160736082, 2], [0.13342506523132322, 2], [0.14083756885528564, 2], [0.14825007247924804, 2], [0.15566257610321044, 2], [0.16307507972717283, 2], [0.17048758335113523, 2], [0.17790008697509763, 2], [0.18531259059906005, 2], [0.19272509422302245, 2], [0.20013759784698484, 2], [0.20755010147094724, 2], [0.21496260509490964, 2], [0.22237510871887206, 2], [0.22978761234283446, 2], [0.23720011596679685, 2], [0.24461261959075925, 2], [0.25202512321472165, 2], [0.25943762683868404, 2], [0.26685013046264644, 2], [0.27426263408660884, 1.8959204682454396], [0.2816751377105713, 1], [0.2890876413345337, 1], [0.2965001449584961, 1], [0.3039126485824585, 1], [0.3113251522064209, 1], [0.31873765583038327, 1], [0.32615015945434567, 0.336387148174121], [0.33356266307830806, 0], [0.34097516670227046, 0], [0.34838767032623286, 0], [0.35580017395019525, 0], [0.3632126775741577, 0], [0.3706251811981201, 0], [0.3780376848220825, 0], [0.3854501884460449, 0], [0.3928626920700073, 0.513940492347099], [0.4002751956939697, 1], [0.4076876993179321, 1], [0.4151002029418945, 1], [0.4225127065658569, 1], [0.4299252101898193, 1], [0.4373377138137817, 1], [0.4447502174377441, 1.2857359957514176], [0.4521627210617065, 2], [0.4595752246856689, 2], [0.4669877283096313, 2], [0.4744002319335937, 2], [0.4818127355575561, 2], [0.4892252391815185, 2], [0.4966377428054809, 2], [0.5040502464294433, 2], [0.5114627500534057, 2], [0.5188752536773681, 2], [0.5262877573013305, 2], [0.5337002609252929, 2], [0.5411127645492553, 2], [0.5485252681732177, 2], [0.5559377717971802, 2], [0.5633502754211426, 2], [0.570762779045105, 2], [0.5781752826690674, 2], [0.5855877862930298, 2], [0.5930002899169922, 2], [0.6004127935409546, 2], [0.607825297164917, 2], [0.6152378007888794, 2], [0.6226503044128417, 2], [0.6300628080368041, 2], [0.6374753116607665, 2], [0.6448878152847289, 2], [0.6523003189086913, 2], [0.6597128225326537, 2], [0.6671253261566161, 2], [0.6745378297805785, 2], [0.6819503334045409, 2], [0.6893628370285033, 2], [0.6967753406524657, 2], [0.7041878442764281, 1.281386908485176], [0.7116003479003905, 1], [0.719012851524353, 1], [0.7264253551483154, 1], [0.7338378587722778, 0.03921568627451242], [0.7412503623962402, 0]]]], "name": "create_and_list_users", "created_at": "2019-18-06T11:17:06", "additive_output": [], "sla": []}, {"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.create_user", 0.20715999603271484], ["keystone_v3.update_user", 0.15962934494018555]], "iter": [["keystone_v3.create_user", [[1, 0.20205211639404297], [2, 0.2188398838043213], [3, 0.20737004280090332], [4, 0.2003779411315918]]], ["keystone_v3.update_user", [[1, 0.15142512321472168], [2, 0.1502840518951416], [3, 0.17006516456604004], [4, 0.16674304008483887]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 3, "x": 0.20960891246795654}, {"y": 1, "x": 0.2188398838043213}], "key": "keystone_v3.create_user", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 2, "x": 0.16017460823059082}, {"y": 2, "x": 0.17006516456604004}], "key": "keystone_v3.update_user", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.20653192202250162}, {"y": 1, "x": 0.21268590291341147}, {"y": 1, "x": 0.2188398838043213}], "key": "keystone_v3.create_user", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 2, "x": 0.15687775611877441}, {"y": 0, "x": 0.16347146034240723}, {"y": 2, "x": 0.17006516456604004}], "key": "keystone_v3.update_user", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.20499342679977417}, {"y": 1, "x": 0.20960891246795654}, {"y": 0, "x": 0.21422439813613892}, {"y": 1, "x": 0.2188398838043213}], "key": "keystone_v3.create_user", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 2, "x": 0.1552293300628662}, {"y": 0, "x": 0.16017460823059082}, {"y": 0, "x": 0.16511988639831543}, {"y": 2, "x": 0.17006516456604004}], "key": "keystone_v3.update_user", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 4], ["errors", 0]], "iter": [["duration", [[1, 0.43451404571533203], [2, 0.4511580467224121], [3, 0.4515368938446045], [4, 0.43968701362609863]]], ["idle_duration", [[1, 0.0], [2, 0.0], [3, 0.0], [4, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 2, "x": 0.44302546977996826}, {"y": 2, "x": 0.4515368938446045}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 2, "x": 0.44018832842508954}, {"y": 0, "x": 0.445862611134847}, {"y": 2, "x": 0.4515368938446045}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 1, "x": 0.43876975774765015}, {"y": 1, "x": 0.44302546977996826}, {"y": 0, "x": 0.4472811818122864}, {"y": 2, "x": 0.4515368938446045}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_user", 0.2, 0.205, 0.215, 0.217, 0.219, 0.207, "100.0%", 4], ["keystone_v3.update_user", 0.15, 0.159, 0.169, 0.17, 0.17, 0.16, "100.0%", 4], ["total", 0.435, 0.445, 0.451, 0.451, 0.452, 0.444, "100.0%", 4]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 4, "load_duration": 1.1042940616607666, "complete_output": [[], [], [], []], "config": "{\n  \"KeystoneBasic.create_and_update_user\": [\n    {\n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {\n        \"create_user_kwargs\": {}, \n        \"update_user_kwargs\": {\n          \"enabled\": false\n        }\n      }, \n      \"sla\": {\n        \"failure_rate\": {\n          \"max\": 0\n        }\n      }, \n      \"context\": {\n        \"users\": {\n          \"tenants\": 2, \n          \"users_per_tenant\": 2\n        }\n      }\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "create_and_update_user", "has_output": false, "full_duration": 5.809375047683716, "load_profile": [["parallel iterations", [[0.0, 0], [0.01126379942893982, 1.0], [0.02252759885787964, 1.9970535604048272], [0.033791398286819464, 2], [0.04505519771575928, 2], [0.0563189971446991, 2], [0.06758279657363893, 2], [0.07884659600257875, 2], [0.09011039543151857, 2], [0.10137419486045839, 2], [0.1126379942893982, 2], [0.12390179371833802, 2], [0.13516559314727786, 2], [0.14642939257621768, 2], [0.1576931920051575, 2], [0.16895699143409731, 2], [0.18022079086303713, 2], [0.19148459029197695, 2], [0.20274838972091677, 2], [0.2140121891498566, 2], [0.2252759885787964, 2], [0.23653978800773623, 2], [0.24780358743667605, 2], [0.25906738686561587, 2], [0.2703311862945557, 2], [0.2815949857234955, 2], [0.29285878515243535, 2], [0.30412258458137514, 2], [0.315386384010315, 2], [0.3266501834392548, 2], [0.33791398286819463, 2], [0.3491777822971344, 2], [0.36044158172607427, 2], [0.3717053811550141, 2], [0.3829691805839539, 2], [0.39423298001289375, 2], [0.40549677944183354, 2], [0.4167605788707734, 2], [0.4280243782997132, 2], [0.43928817772865303, 1.576152607879815], [0.4505519771575928, 1], [0.46181577658653267, 1], [0.47307957601547246, 0.05675328946344236], [0.4843433754444123, 0], [0.4956071748733521, 0], [0.5068709743022919, 0], [0.5181347737312317, 0], [0.5293985731601716, 0], [0.5406623725891114, 0], [0.5519261720180513, 0], [0.563189971446991, 0], [0.5744537708759309, 0], [0.5857175703048707, 0], [0.5969813697338106, 0], [0.6082451691627503, 0], [0.6195089685916901, 0], [0.63077276802063, 0.6620073885252202], [0.6420365674495698, 1], [0.6533003668785096, 1], [0.6645641663074494, 1], [0.6758279657363893, 1.996192960688881], [0.6870917651653291, 2], [0.6983555645942688, 2], [0.7096193640232087, 2], [0.7208831634521485, 2], [0.7321469628810884, 2], [0.7434107623100282, 2], [0.754674561738968, 2], [0.7659383611679078, 2], [0.7772021605968477, 2], [0.7884659600257875, 2], [0.7997297594547272, 2], [0.8109935588836671, 2], [0.8222573583126069, 2], [0.8335211577415468, 2], [0.8447849571704865, 2], [0.8560487565994264, 2], [0.8673125560283662, 2], [0.8785763554573061, 2], [0.8898401548862458, 2], [0.9011039543151856, 2], [0.9123677537441255, 2], [0.9236315531730653, 2], [0.9348953526020052, 2], [0.9461591520309449, 2], [0.9574229514598848, 2], [0.9686867508888246, 2], [0.9799505503177645, 2], [0.9912143497467042, 2], [1.002478149175644, 2], [1.0137419486045838, 2], [1.0250057480335237, 2], [1.0362695474624635, 2], [1.0475333468914034, 2], [1.0587971463203432, 2], [1.070060945749283, 2], [1.0813247451782229, 1.4254335050405182], [1.0925885446071626, 1], [1.1038523440361026, 1], [1.1151161434650423, 0.03921568627448709], [1.126379942893982, 0]]]], "name": "create_and_update_user", "created_at": "2019-18-06T11:17:13", "additive_output": [], "sla": [{"criterion": "failure_rate", "detail": "Failure rate criteria 0.00% <= 0.00% <= 0.00% - Passed", "success": true}]}, {"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.create_user", 0.33243638277053833], ["keystone_v3.delete_user", 0.1843332052230835]], "iter": [["keystone_v3.create_user", [[1, 0.22783279418945312], [2, 0.25673699378967285], [3, 0.45809483528137207], [4, 0.3870809078216553]]], ["keystone_v3.delete_user", [[1, 0.20152997970581055], [2, 0.22787094116210938], [3, 0.1412649154663086], [4, 0.16666698455810547]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 2, "x": 0.3429638147354126}, {"y": 2, "x": 0.45809483528137207}], "key": "keystone_v3.create_user", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 2, "x": 0.18456792831420898}, {"y": 2, "x": 0.22787094116210938}], "key": "keystone_v3.delete_user", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.30458680788675946}, {"y": 0, "x": 0.3813408215840658}, {"y": 2, "x": 0.45809483528137207}], "key": "keystone_v3.create_user", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 2, "x": 0.1701335906982422}, {"y": 0, "x": 0.19900226593017578}, {"y": 2, "x": 0.22787094116210938}], "key": "keystone_v3.delete_user", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.28539830446243286}, {"y": 0, "x": 0.3429638147354126}, {"y": 1, "x": 0.40052932500839233}, {"y": 1, "x": 0.45809483528137207}], "key": "keystone_v3.create_user", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 1, "x": 0.1629164218902588}, {"y": 1, "x": 0.18456792831420898}, {"y": 1, "x": 0.20621943473815918}, {"y": 1, "x": 0.22787094116210938}], "key": "keystone_v3.delete_user", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 4], ["errors", 0]], "iter": [["duration", [[1, 0.46183300018310547], [2, 0.5239729881286621], [3, 0.6576449871063232], [4, 0.6030828952789307]]], ["idle_duration", [[1, 0.0], [2, 0.0], [3, 0.0], [4, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 2, "x": 0.5597389936447144}, {"y": 2, "x": 0.6576449871063232}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 2, "x": 0.5271036624908447}, {"y": 0, "x": 0.592374324798584}, {"y": 2, "x": 0.6576449871063232}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 1, "x": 0.5107859969139099}, {"y": 1, "x": 0.5597389936447144}, {"y": 1, "x": 0.6086919903755188}, {"y": 1, "x": 0.6576449871063232}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_user", 0.228, 0.322, 0.437, 0.447, 0.458, 0.332, "100.0%", 4], ["keystone_v3.delete_user", 0.141, 0.184, 0.22, 0.224, 0.228, 0.184, "100.0%", 4], ["total", 0.462, 0.564, 0.641, 0.649, 0.658, 0.562, "100.0%", 4]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 4, "load_duration": 1.4139959812164307, "complete_output": [[], [], [], []], "config": "{\n  \"KeystoneBasic.create_delete_user\": [\n    {\n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {}, \n      \"sla\": {}, \n      \"context\": {}\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "create_delete_user", "has_output": false, "full_duration": 3.4583258628845215, "load_profile": [["parallel iterations", [[0.0, 0], [0.014422759008407593, 1.5573734629898472], [0.028845518016815185, 2], [0.043268277025222776, 2], [0.05769103603363037, 2], [0.07211379504203796, 2], [0.08653655405044555, 2], [0.10095931305885315, 2], [0.11538207206726074, 2], [0.12980483107566834, 2], [0.14422759008407593, 2], [0.15865034909248352, 2], [0.1730731081008911, 2], [0.1874958671092987, 2], [0.2019186261177063, 2], [0.2163413851261139, 2], [0.23076414413452148, 2], [0.24518690314292907, 2], [0.2596096621513367, 2], [0.27403242115974424, 2], [0.28845518016815186, 2], [0.3028779391765594, 2], [0.31730069818496703, 2], [0.33172345719337465, 2], [0.3461462162017822, 2], [0.3605689752101898, 2], [0.3749917342185974, 2], [0.389414493227005, 2], [0.4038372522354126, 2], [0.4182600112438202, 2], [0.4326827702522278, 2], [0.44710552926063535, 2], [0.46152828826904296, 2], [0.4759510472774506, 1.0211271583949282], [0.49037380628585814, 1], [0.5047965652942658, 1], [0.5192193243026734, 1], [0.5336420833110809, 0.7722211605643315], [0.5480648423194885, 0], [0.5624876013278961, 0], [0.5769103603363037, 0], [0.5913331193447113, 0], [0.6057558783531188, 0], [0.6201786373615265, 0], [0.6346013963699341, 0], [0.6490241553783417, 0], [0.6634469143867493, 0], [0.6778696733951568, 0], [0.6922924324035644, 0], [0.706715191411972, 0], [0.7211379504203796, 0], [0.7355607094287873, 0], [0.7499834684371948, 0.7996018239056569], [0.7644062274456024, 1], [0.77882898645401, 1], [0.7932517454624176, 1], [0.8076745044708252, 1], [0.8220972634792327, 1.7754534021689632], [0.8365200224876403, 2], [0.850942781496048, 2], [0.8653655405044556, 2], [0.8797882995128632, 2], [0.8942110585212707, 2], [0.9086338175296783, 2], [0.9230565765380859, 2], [0.9374793355464935, 2], [0.9519020945549012, 2], [0.9663248535633087, 2], [0.9807476125717163, 2], [0.9951703715801239, 2], [1.0095931305885315, 2], [1.0240158895969391, 2], [1.0384386486053467, 2], [1.0528614076137544, 2], [1.0672841666221617, 2], [1.0817069256305694, 2], [1.096129684638977, 2], [1.1105524436473846, 2], [1.1249752026557922, 2], [1.1393979616641998, 2], [1.1538207206726074, 2], [1.168243479681015, 2], [1.1826662386894227, 2], [1.1970889976978303, 2], [1.2115117567062377, 2], [1.2259345157146453, 2], [1.240357274723053, 2], [1.2547800337314605, 2], [1.2692027927398681, 2], [1.2836255517482758, 2], [1.2980483107566834, 2], [1.312471069765091, 2], [1.3268938287734986, 2], [1.3413165877819062, 2], [1.3557393467903136, 2], [1.3701621057987212, 2], [1.3845848648071288, 2], [1.3990076238155364, 1.7981223509873827], [1.413430382823944, 1], [1.4278531418323517, 0.03921568627451168], [1.4422759008407593, 0]]]], "name": "create_delete_user", "created_at": "2019-18-06T11:17:19", "additive_output": [], "sla": []}, {"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.create_user", 0.19730275869369507]], "iter": [["keystone_v3.create_user", [[1, 0.17935609817504883], [2, 0.2099170684814453], [3, 0.20916485786437988], [4, 0.19077301025390625]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 2, "x": 0.19463658332824707}, {"y": 2, "x": 0.2099170684814453}], "key": "keystone_v3.create_user", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 1, "x": 0.189543088277181}, {"y": 1, "x": 0.19973007837931314}, {"y": 2, "x": 0.2099170684814453}], "key": "keystone_v3.create_user", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 1, "x": 0.18699634075164795}, {"y": 1, "x": 0.19463658332824707}, {"y": 0, "x": 0.2022768259048462}, {"y": 2, "x": 0.2099170684814453}], "key": "keystone_v3.create_user", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 4], ["errors", 0]], "iter": [["duration", [[1, 0.20960283279418945], [2, 0.25833678245544434], [3, 0.24337410926818848], [4, 0.22220206260681152]]], ["idle_duration", [[1, 0.0], [2, 0.0], [3, 0.0], [4, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 2, "x": 0.2339698076248169}, {"y": 2, "x": 0.25833678245544434}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 2, "x": 0.22584748268127441}, {"y": 0, "x": 0.24209213256835938}, {"y": 2, "x": 0.25833678245544434}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 1, "x": 0.22178632020950317}, {"y": 1, "x": 0.2339698076248169}, {"y": 1, "x": 0.24615329504013062}, {"y": 1, "x": 0.25833678245544434}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_user", 0.179, 0.2, 0.21, 0.21, 0.21, 0.197, "100.0%", 4], ["total", 0.21, 0.233, 0.254, 0.256, 0.258, 0.233, "100.0%", 4]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 4, "load_duration": 0.6000568866729736, "complete_output": [[], [], [], []], "config": "{\n  \"KeystoneBasic.create_user\": [\n    {\n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {}, \n      \"sla\": {}, \n      \"context\": {}\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "create_user", "has_output": false, "full_duration": 4.330002069473267, "load_profile": [["parallel iterations", [[0.0, 0], [0.006120580244064331, 1.4828910803607829], [0.012241160488128662, 2], [0.01836174073219299, 2], [0.024482320976257323, 2], [0.030602901220321655, 2], [0.03672348146438598, 2], [0.042844061708450315, 2], [0.04896464195251465, 2], [0.05508522219657898, 2], [0.06120580244064331, 2], [0.06732638268470764, 2], [0.07344696292877197, 2], [0.0795675431728363, 2], [0.08568812341690063, 2], [0.09180870366096497, 2], [0.0979292839050293, 2], [0.10404986414909362, 2], [0.11017044439315796, 2], [0.11629102463722228, 2], [0.12241160488128662, 2], [0.12853218512535095, 2], [0.13465276536941528, 2], [0.14077334561347962, 2], [0.14689392585754393, 2], [0.15301450610160827, 2], [0.1591350863456726, 2], [0.16525566658973692, 2], [0.17137624683380126, 2], [0.1774968270778656, 2], [0.18361740732192994, 2], [0.18973798756599425, 2], [0.1958585678100586, 2], [0.20197914805412293, 2], [0.20809972829818724, 2], [0.21422030854225158, 1.245582025896958], [0.2203408887863159, 1], [0.22646146903038025, 1], [0.23258204927444456, 1], [0.2387026295185089, 1], [0.24482320976257324, 1], [0.2509437900066376, 1], [0.2570643702507019, 1], [0.2631849504947662, 0.7249997002521201], [0.26930553073883057, 0], [0.2754261109828949, 0], [0.28154669122695924, 0], [0.28766727147102356, 0], [0.29378785171508787, 0], [0.29990843195915223, 0], [0.30602901220321654, 0], [0.31214959244728085, 0], [0.3182701726913452, 0], [0.32439075293540953, 0], [0.33051133317947384, 0.6609647958402122], [0.3366319134235382, 1], [0.3427524936676025, 1], [0.34887307391166683, 1], [0.3549936541557312, 1], [0.3611142343997955, 1], [0.3672348146438599, 1], [0.3733553948879242, 1], [0.3794759751319885, 1.264868852491324], [0.38559655537605286, 2], [0.3917171356201172, 2], [0.3978377158641815, 2], [0.40395829610824585, 2], [0.41007887635231016, 2], [0.4161994565963745, 2], [0.42232003684043884, 2], [0.42844061708450315, 2], [0.4345611973285675, 2], [0.4406817775726318, 2], [0.44680235781669614, 2], [0.4529229380607605, 2], [0.4590435183048248, 2], [0.4651640985488891, 2], [0.4712846787929535, 2], [0.4774052590370178, 2], [0.4835258392810821, 2], [0.4896464195251465, 2], [0.4957669997692108, 2], [0.5018875800132752, 2], [0.5080081602573394, 2], [0.5141287405014038, 2], [0.5202493207454681, 2], [0.5263699009895324, 2], [0.5324904812335968, 2], [0.5386110614776611, 2], [0.5447316417217254, 2], [0.5508522219657898, 2], [0.5569728022098541, 2], [0.5630933824539185, 2], [0.5692139626979827, 2], [0.5753345429420471, 1.1022765249822577], [0.5814551231861115, 1], [0.5875757034301757, 1], [0.5936962836742401, 1], [0.5998168639183045, 1], [0.6059374441623687, 0.03921568627450612], [0.6120580244064331, 0]]]], "name": "create_user", "created_at": "2019-18-06T11:17:23", "additive_output": [], "sla": []}, {"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.create_user", 0.20703816413879395], ["keystone_v3.update_user", 0.12426084280014038], ["keystone_v3.delete_user", 0.18317246437072754]], "iter": [["keystone_v3.create_user", [[1, 0.2238469123840332], [2, 0.1906108856201172], [3, 0.20527100563049316], [4, 0.20842385292053223]]], ["keystone_v3.update_user", [[1, 0.1324758529663086], [2, 0.13556218147277832], [3, 0.10216617584228516], [4, 0.12683916091918945]]], ["keystone_v3.delete_user", [[1, 0.17789292335510254], [2, 0.18323707580566406], [3, 0.20761489868164062], [4, 0.16394495964050293]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 2, "x": 0.2072288990020752}, {"y": 2, "x": 0.2238469123840332}], "key": "keystone_v3.create_user", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 1, "x": 0.11886417865753174}, {"y": 3, "x": 0.13556218147277832}], "key": "keystone_v3.update_user", "view": "Square Root Choice"}, {"disabled": 2, "values": [{"y": 3, "x": 0.18577992916107178}, {"y": 1, "x": 0.20761489868164062}], "key": "keystone_v3.delete_user", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 1, "x": 0.2016895612080892}, {"y": 2, "x": 0.2127682367960612}, {"y": 1, "x": 0.2238469123840332}], "key": "keystone_v3.create_user", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 1, "x": 0.11329817771911621}, {"y": 0, "x": 0.12443017959594727}, {"y": 3, "x": 0.13556218147277832}], "key": "keystone_v3.update_user", "view": "Sturges Formula"}, {"disabled": 2, "values": [{"y": 2, "x": 0.17850160598754883}, {"y": 1, "x": 0.19305825233459473}, {"y": 1, "x": 0.20761489868164062}], "key": "keystone_v3.delete_user", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 1, "x": 0.1989198923110962}, {"y": 1, "x": 0.2072288990020752}, {"y": 1, "x": 0.2155379056930542}, {"y": 1, "x": 0.2238469123840332}], "key": "keystone_v3.create_user", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 1, "x": 0.11051517724990845}, {"y": 0, "x": 0.11886417865753174}, {"y": 1, "x": 0.12721318006515503}, {"y": 2, "x": 0.13556218147277832}], "key": "keystone_v3.update_user", "view": "Rice Rule"}, {"disabled": 2, "values": [{"y": 1, "x": 0.17486244440078735}, {"y": 2, "x": 0.18577992916107178}, {"y": 0, "x": 0.1966974139213562}, {"y": 1, "x": 0.20761489868164062}], "key": "keystone_v3.delete_user", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 4], ["errors", 0]], "iter": [["duration", [[1, 0.568289041519165], [2, 0.5427038669586182], [3, 0.5450959205627441], [4, 0.5353820323944092]]], ["idle_duration", [[1, 0.0], [2, 0.0], [3, 0.0], [4, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 3, "x": 0.5518355369567871}, {"y": 1, "x": 0.568289041519165}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 3, "x": 0.5463510354359945}, {"y": 0, "x": 0.5573200384775797}, {"y": 1, "x": 0.568289041519165}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 2, "x": 0.5436087846755981}, {"y": 1, "x": 0.5518355369567871}, {"y": 0, "x": 0.5600622892379761}, {"y": 1, "x": 0.568289041519165}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_user", 0.191, 0.207, 0.219, 0.222, 0.224, 0.207, "100.0%", 4], ["keystone_v3.update_user", 0.102, 0.13, 0.135, 0.135, 0.136, 0.124, "100.0%", 4], ["keystone_v3.delete_user", 0.164, 0.181, 0.2, 0.204, 0.208, 0.183, "100.0%", 4], ["total", 0.535, 0.544, 0.561, 0.565, 0.568, 0.548, "100.0%", 4]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 4, "load_duration": 1.3106420040130615, "complete_output": [[], [], [], []], "config": "{\n  \"KeystoneBasic.create_user_set_enabled_and_delete\": [\n    {\n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {\n        \"enabled\": true\n      }, \n      \"sla\": {}, \n      \"context\": {}\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "create_user_set_enabled_and_delete", "has_output": false, "full_duration": 3.3572330474853516, "load_profile": [["parallel iterations", [[0.0, 0], [0.013368548440933228, 1.9970751763255812], [0.026737096881866457, 2], [0.040105645322799685, 2], [0.05347419376373291, 2], [0.06684274220466614, 2], [0.08021129064559937, 2], [0.0935798390865326, 2], [0.10694838752746583, 2], [0.12031693596839906, 2], [0.13368548440933228, 2], [0.14705403285026553, 2], [0.16042258129119874, 2], [0.17379112973213195, 2], [0.1871596781730652, 2], [0.20052822661399844, 2], [0.21389677505493165, 2], [0.22726532349586487, 2], [0.2406338719367981, 2], [0.25400242037773135, 2], [0.26737096881866457, 2], [0.2807395172595978, 2], [0.29410806570053105, 2], [0.30747661414146427, 2], [0.3208451625823975, 2], [0.3342137110233307, 2], [0.3475822594642639, 2], [0.3609508079051972, 2], [0.3743193563461304, 2], [0.3876879047870636, 2], [0.4010564532279969, 2], [0.4144250016689301, 2], [0.4277935501098633, 2], [0.4411620985507965, 2], [0.45453064699172974, 2], [0.467899195432663, 2], [0.4812677438735962, 2], [0.49463629231452944, 2], [0.5080048407554627, 2], [0.5213733891963959, 2], [0.5347419376373291, 2], [0.5481104860782624, 1.5984965386192034], [0.5614790345191956, 1], [0.5748475829601288, 0.5094051182937618], [0.5882161314010621, 0], [0.6015846798419953, 0], [0.6149532282829285, 0], [0.6283217767238617, 0], [0.641690325164795, 0], [0.6550588736057282, 0], [0.6684274220466614, 0], [0.6817959704875947, 0], [0.6951645189285278, 0], [0.7085330673694611, 0], [0.7219016158103944, 0], [0.7352701642513275, 0], [0.7486387126922608, 0.49225044961228076], [0.7620072611331941, 1], [0.7753758095741272, 1.0086649613446579], [0.7887443580150605, 2], [0.8021129064559938, 2], [0.8154814548969269, 2], [0.8288500033378602, 2], [0.8422185517787933, 2], [0.8555871002197266, 2], [0.8689556486606599, 2], [0.882324197101593, 2], [0.8956927455425263, 2], [0.9090612939834595, 2], [0.9224298424243927, 2], [0.935798390865326, 2], [0.9491669393062592, 2], [0.9625354877471924, 2], [0.9759040361881257, 2], [0.9892725846290589, 2], [1.002641133069992, 2], [1.0160096815109254, 2], [1.0293782299518586, 2], [1.0427467783927917, 2], [1.056115326833725, 2], [1.0694838752746583, 2], [1.0828524237155914, 2], [1.0962209721565248, 2], [1.109589520597458, 2], [1.1229580690383911, 2], [1.1363266174793245, 2], [1.1496951659202577, 2], [1.1630637143611908, 2], [1.1764322628021242, 2], [1.1898008112430574, 2], [1.2031693596839905, 2], [1.2165379081249237, 2], [1.229906456565857, 2], [1.2432750050067902, 2], [1.2566435534477234, 2], [1.2700121018886568, 2], [1.28338065032959, 2], [1.296749198770523, 1.2822527039022842], [1.3101177472114565, 1], [1.3234862956523896, 0.03921568627449755], [1.3368548440933228, 0]]]], "name": "create_user_set_enabled_and_delete", "created_at": "2019-18-06T11:17:30", "additive_output": [], "sla": []}, {"runner": "constant", "hooks": [], "pos": "1", "atomic": {"pie": [["keystone_v3.create_user", 0.18214303255081177], ["keystone_v3.update_user", 0.07762014865875244], ["keystone_v3.delete_user", 0.19074875116348267]], "iter": [["keystone_v3.create_user", [[1, 0.17747998237609863], [2, 0.19452786445617676], [3, 0.17368817329406738], [4, 0.1828761100769043]]], ["keystone_v3.update_user", [[1, 0.08087682723999023], [2, 0.07515478134155273], [3, 0.07311296463012695], [4, 0.08133602142333984]]], ["keystone_v3.delete_user", [[1, 0.14346599578857422], [2, 0.1739640235900879], [3, 0.22326397895812988], [4, 0.22230100631713867]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 3, "x": 0.18410801887512207}, {"y": 1, "x": 0.19452786445617676}], "key": "keystone_v3.create_user", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 2, "x": 0.0772244930267334}, {"y": 2, "x": 0.08133602142333984}], "key": "keystone_v3.update_user", "view": "Square Root Choice"}, {"disabled": 2, "values": [{"y": 2, "x": 0.18336498737335205}, {"y": 2, "x": 0.22326397895812988}], "key": "keystone_v3.delete_user", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.1806347370147705}, {"y": 1, "x": 0.18758130073547363}, {"y": 1, "x": 0.19452786445617676}], "key": "keystone_v3.create_user", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 2, "x": 0.07585398356119792}, {"y": 0, "x": 0.07859500249226888}, {"y": 2, "x": 0.08133602142333984}], "key": "keystone_v3.update_user", "view": "Sturges Formula"}, {"disabled": 2, "values": [{"y": 1, "x": 0.17006532351175943}, {"y": 1, "x": 0.19666465123494467}, {"y": 2, "x": 0.22326397895812988}], "key": "keystone_v3.delete_user", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.17889809608459473}, {"y": 1, "x": 0.18410801887512207}, {"y": 0, "x": 0.18931794166564941}, {"y": 1, "x": 0.19452786445617676}], "key": "keystone_v3.create_user", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 2, "x": 0.07516872882843018}, {"y": 0, "x": 0.0772244930267334}, {"y": 0, "x": 0.07928025722503662}, {"y": 2, "x": 0.08133602142333984}], "key": "keystone_v3.update_user", "view": "Rice Rule"}, {"disabled": 2, "values": [{"y": 1, "x": 0.16341549158096313}, {"y": 1, "x": 0.18336498737335205}, {"y": 0, "x": 0.20331448316574097}, {"y": 2, "x": 0.22326397895812988}], "key": "keystone_v3.delete_user", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 4], ["errors", 0]], "iter": [["duration", [[1, 0.4359259605407715], [2, 0.4798238277435303], [3, 0.519536018371582], [4, 0.5272679328918457]]], ["idle_duration", [[1, 0.0], [2, 0.0], [3, 0.0], [4, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 2, "x": 0.4815969467163086}, {"y": 2, "x": 0.5272679328918457}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 1, "x": 0.4663732846577962}, {"y": 1, "x": 0.496820608774821}, {"y": 2, "x": 0.5272679328918457}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 1, "x": 0.45876145362854004}, {"y": 1, "x": 0.4815969467163086}, {"y": 0, "x": 0.5044324398040771}, {"y": 2, "x": 0.5272679328918457}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_user", 0.174, 0.18, 0.191, 0.193, 0.195, 0.182, "100.0%", 4], ["keystone_v3.update_user", 0.073, 0.078, 0.081, 0.081, 0.081, 0.078, "100.0%", 4], ["keystone_v3.delete_user", 0.143, 0.198, 0.223, 0.223, 0.223, 0.191, "100.0%", 4], ["total", 0.436, 0.5, 0.525, 0.526, 0.527, 0.491, "100.0%", 4]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 4, "load_duration": 1.2131071090698242, "complete_output": [[], [], [], []], "config": "{\n  \"KeystoneBasic.create_user_set_enabled_and_delete\": [\n    {\n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {\n        \"enabled\": false\n      }, \n      \"sla\": {}, \n      \"context\": {}\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "create_user_set_enabled_and_delete", "has_output": false, "full_duration": 3.230274200439453, "load_profile": [["parallel iterations", [[0.0, 0], [0.012373692512512207, 1.5406272348684449], [0.024747385025024413, 2], [0.03712107753753662, 2], [0.04949477005004883, 2], [0.06186846256256103, 2], [0.07424215507507324, 2], [0.08661584758758545, 2], [0.09898954010009765, 2], [0.11136323261260986, 2], [0.12373692512512206, 2], [0.13611061763763427, 2], [0.1484843101501465, 2], [0.16085800266265868, 2], [0.1732316951751709, 2], [0.1856053876876831, 2], [0.1979790802001953, 2], [0.21035277271270753, 2], [0.22272646522521972, 2], [0.23510015773773194, 2], [0.24747385025024413, 2], [0.25984754276275634, 2], [0.27222123527526854, 2], [0.2845949277877807, 2], [0.296968620300293, 2], [0.30934231281280516, 2], [0.32171600532531736, 2], [0.3340896978378296, 2], [0.3464633903503418, 2], [0.358837082862854, 2], [0.3712107753753662, 2], [0.3835844678878784, 2], [0.3959581604003906, 2], [0.4083318529129028, 2], [0.42070554542541505, 2], [0.43307923793792724, 2], [0.44545293045043943, 1.2300624975095875], [0.4578266229629516, 1], [0.47020031547546387, 1], [0.48257400798797606, 1], [0.49494770050048825, 0.23711249466945805], [0.5073213930130005, 0], [0.5196950855255127, 0], [0.5320687780380249, 0], [0.5444424705505371, 0], [0.5568161630630493, 0], [0.5691898555755615, 0], [0.5815635480880738, 0], [0.593937240600586, 0], [0.6063109331130981, 0], [0.6186846256256103, 0], [0.6310583181381225, 0], [0.6434320106506347, 0], [0.6558057031631469, 0], [0.6681793956756592, 0.5747219774520653], [0.6805530881881714, 1], [0.6929267807006836, 1.572796238110663], [0.7053004732131958, 2], [0.717674165725708, 2], [0.7300478582382202, 2], [0.7424215507507324, 2], [0.7547952432632447, 2], [0.7671689357757568, 2], [0.779542628288269, 2], [0.7919163208007812, 2], [0.8042900133132934, 2], [0.8166637058258056, 2], [0.8290373983383178, 2], [0.8414110908508301, 2], [0.8537847833633423, 2], [0.8661584758758545, 2], [0.8785321683883667, 2], [0.8909058609008789, 2], [0.9032795534133911, 2], [0.9156532459259032, 2], [0.9280269384384155, 2], [0.9404006309509277, 2], [0.9527743234634399, 2], [0.9651480159759521, 2], [0.9775217084884643, 2], [0.9898954010009765, 2], [1.0022690935134888, 2], [1.014642786026001, 2], [1.0270164785385132, 2], [1.0393901710510254, 2], [1.0517638635635376, 2], [1.0641375560760498, 2], [1.076511248588562, 2], [1.0888849411010741, 2], [1.1012586336135863, 2], [1.1136323261260985, 2], [1.1260060186386107, 2], [1.138379711151123, 2], [1.1507534036636353, 2], [1.1631270961761475, 2], [1.1755007886886597, 2], [1.187874481201172, 1.4124227528885482], [1.200248173713684, 1], [1.2126218662261963, 1], [1.2249955587387085, 0.03921568627451081], [1.2373692512512207, 0]]]], "name": "create_user_set_enabled_and_delete [2]", "created_at": "2019-18-06T11:17:34", "additive_output": [], "sla": []}, {"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.create_user", 0.37108826637268066], ["keystone_v3.update_user", 0.262626051902771]], "iter": [["keystone_v3.create_user", [[1, 0.19992995262145996], [2, 0.867638111114502], [3, 0.20136308670043945], [4, 0.2154219150543213]]], ["keystone_v3.update_user", [[1, 0.7222599983215332], [2, 0.12468600273132324], [3, 0.11165308952331543], [4, 0.09190511703491211]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 3, "x": 0.533784031867981}, {"y": 1, "x": 0.867638111114502}], "key": "keystone_v3.create_user", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 3, "x": 0.40708255767822266}, {"y": 1, "x": 0.7222599983215332}], "key": "keystone_v3.update_user", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 3, "x": 0.42249933878580725}, {"y": 0, "x": 0.6450687249501545}, {"y": 1, "x": 0.867638111114502}], "key": "keystone_v3.create_user", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 3, "x": 0.30202341079711914}, {"y": 0, "x": 0.5121417045593262}, {"y": 1, "x": 0.7222599983215332}], "key": "keystone_v3.update_user", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 3, "x": 0.36685699224472046}, {"y": 0, "x": 0.533784031867981}, {"y": 0, "x": 0.7007110714912415}, {"y": 1, "x": 0.867638111114502}], "key": "keystone_v3.create_user", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 3, "x": 0.24949383735656738}, {"y": 0, "x": 0.40708255767822266}, {"y": 0, "x": 0.5646712779998779}, {"y": 1, "x": 0.7222599983215332}], "key": "keystone_v3.update_user", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 4], ["errors", 0]], "iter": [["duration", [[1, 0.9516561031341553], [2, 1.0233280658721924], [3, 0.3584609031677246], [4, 0.338702917098999]]], ["idle_duration", [[1, 0.0], [2, 0.0], [3, 0.0], [4, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 2, "x": 0.6810154914855957}, {"y": 2, "x": 1.0233280658721924}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 2, "x": 0.5669113000233968}, {"y": 0, "x": 0.7951196829477947}, {"y": 2, "x": 1.0233280658721924}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 2, "x": 0.5098592042922974}, {"y": 0, "x": 0.6810154914855957}, {"y": 0, "x": 0.852171778678894}, {"y": 2, "x": 1.0233280658721924}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_user", 0.2, 0.208, 0.672, 0.77, 0.868, 0.371, "100.0%", 4], ["keystone_v3.update_user", 0.092, 0.118, 0.543, 0.633, 0.722, 0.263, "100.0%", 4], ["total", 0.339, 0.655, 1.002, 1.013, 1.023, 0.668, "100.0%", 4]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 4, "load_duration": 1.4773130416870117, "complete_output": [[], [], [], []], "config": "{\n  \"KeystoneBasic.create_user_update_password\": [\n    {\n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {}, \n      \"sla\": {}, \n      \"context\": {}\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "create_user_update_password", "has_output": false, "full_duration": 4.902587175369263, "load_profile": [["parallel iterations", [[0.0, 0], [0.01506859302520752, 1.6532560702734365], [0.03013718605041504, 2], [0.04520577907562256, 2], [0.06027437210083008, 2], [0.0753429651260376, 2], [0.09041155815124512, 2], [0.10548015117645264, 2], [0.12054874420166016, 2], [0.13561733722686767, 2], [0.1506859302520752, 2], [0.1657545232772827, 2], [0.18082311630249023, 2], [0.19589170932769776, 2], [0.21096030235290528, 2], [0.2260288953781128, 2], [0.24109748840332032, 2], [0.2561660814285278, 2], [0.27123467445373534, 2], [0.28630326747894286, 2], [0.3013718605041504, 2], [0.3164404535293579, 2], [0.3315090465545654, 2], [0.34657763957977294, 2], [0.36164623260498047, 2], [0.376714825630188, 2], [0.3917834186553955, 2], [0.40685201168060303, 2], [0.42192060470581055, 2], [0.4369891977310181, 2], [0.4520577907562256, 2], [0.4671263837814331, 2], [0.48219497680664064, 2], [0.49726356983184816, 2], [0.5123321628570556, 2], [0.5274007558822632, 2], [0.5424693489074707, 2], [0.5575379419326782, 2], [0.5726065349578857, 2], [0.5876751279830933, 2], [0.6027437210083008, 2], [0.6178123140335083, 2], [0.6328809070587158, 2], [0.6479495000839234, 2], [0.6630180931091308, 2], [0.6780866861343384, 2], [0.6931552791595459, 2], [0.7082238721847535, 2], [0.7232924652099609, 2], [0.7383610582351685, 2], [0.753429651260376, 2], [0.7684982442855836, 2], [0.783566837310791, 2], [0.7986354303359986, 2], [0.8137040233612061, 2], [0.8287726163864136, 2], [0.8438412094116211, 2], [0.8589098024368287, 2], [0.8739783954620362, 2], [0.8890469884872437, 2], [0.9041155815124512, 2], [0.9191841745376588, 2], [0.9342527675628662, 2], [0.9493213605880738, 2], [0.9643899536132813, 1.1549409783764006], [0.9794585466384887, 1], [0.9945271396636963, 1], [1.0095957326889038, 1], [1.0246643257141113, 1], [1.039732918739319, 0.25806545525429464], [1.0548015117645264, 0.13169149331052696], [1.0698701047897339, 1], [1.0849386978149413, 1], [1.100007290840149, 1], [1.1150758838653565, 1], [1.130144476890564, 1], [1.1452130699157714, 1.4381925583040824], [1.1602816629409791, 2], [1.1753502559661866, 2], [1.190418848991394, 2], [1.2054874420166015, 2], [1.2205560350418092, 2], [1.2356246280670167, 2], [1.2506932210922241, 2], [1.2657618141174316, 2], [1.2808304071426393, 2], [1.2958990001678468, 2], [1.3109675931930542, 2], [1.3260361862182617, 2], [1.3411047792434694, 2], [1.3561733722686768, 2], [1.3712419652938843, 2], [1.3863105583190918, 2], [1.4013791513442995, 2], [1.416447744369507, 1.6569198633086755], [1.4315163373947144, 1], [1.4465849304199219, 1], [1.4616535234451293, 1], [1.476722116470337, 1], [1.4917907094955445, 0.03921568627450273], [1.506859302520752, 0]]]], "name": "create_user_update_password", "created_at": "2019-18-06T11:17:38", "additive_output": [], "sla": []}, {"runner": "constant", "hooks": [], "pos": "0", "atomic": {"pie": [["keystone_v3.create_project", 0.208105206489563], ["keystone_v3.create_user", 0.3560807704925537], ["keystone_v3.list_roles", 0.027733266353607178], ["keystone_v3.add_role", 0.07682275772094727], ["keystone_v3.create_role", 0.07951325178146362], ["keystone_v3.get_project", 0.025560736656188965], ["keystone_v3.get_user", 0.02677053213119507], ["keystone_v3.get_role", 0.027324020862579346], ["keystone_v3.list_services", 0.030291199684143066], ["keystone_v3.get_services", 0.024453818798065186]], "iter": [["keystone_v3.create_project", [[1, 0.24246597290039062], [2, 0.2122330665588379], [3, 0.18754887580871582], [4, 0.19017291069030762]]], ["keystone_v3.create_user", [[1, 0.28575611114501953], [2, 0.3496420383453369], [3, 0.398953914642334], [4, 0.3899710178375244]]], ["keystone_v3.list_roles", [[1, 0.0251619815826416], [2, 0.026179075241088867], [3, 0.023579835891723633], [4, 0.03601217269897461]]], ["keystone_v3.add_role", [[1, 0.07486200332641602], [2, 0.07418704032897949], [3, 0.08364200592041016], [4, 0.0745999813079834]]], ["keystone_v3.create_role", [[1, 0.06920003890991211], [2, 0.10133004188537598], [3, 0.0878448486328125], [4, 0.059678077697753906]]], ["keystone_v3.get_project", [[1, 0.02331089973449707], [2, 0.03278088569641113], [3, 0.025624990463256836], [4, 0.02052617073059082]]], ["keystone_v3.get_user", [[1, 0.03050708770751953], [2, 0.023185014724731445], [3, 0.0303800106048584], [4, 0.0230100154876709]]], ["keystone_v3.get_role", [[1, 0.029128074645996094], [2, 0.025237083435058594], [3, 0.031601905822753906], [4, 0.02332901954650879]]], ["keystone_v3.list_services", [[1, 0.029942989349365234], [2, 0.030545949935913086], [3, 0.027472972869873047], [4, 0.0332028865814209]]], ["keystone_v3.get_services", [[1, 0.026803016662597656], [2, 0.023103952407836914], [3, 0.02039813995361328], [4, 0.02751016616821289]]]], "histogram": {"data": [[{"disabled": 0, "values": [{"y": 3, "x": 0.21500742435455322}, {"y": 1, "x": 0.24246597290039062}], "key": "keystone_v3.create_project", "view": "Square Root Choice"}, {"disabled": 1, "values": [{"y": 1, "x": 0.34235501289367676}, {"y": 3, "x": 0.398953914642334}], "key": "keystone_v3.create_user", "view": "Square Root Choice"}, {"disabled": 2, "values": [{"y": 3, "x": 0.02979600429534912}, {"y": 1, "x": 0.03601217269897461}], "key": "keystone_v3.list_roles", "view": "Square Root Choice"}, {"disabled": 3, "values": [{"y": 3, "x": 0.07891452312469482}, {"y": 1, "x": 0.08364200592041016}], "key": "keystone_v3.add_role", "view": "Square Root Choice"}, {"disabled": 4, "values": [{"y": 2, "x": 0.08050405979156494}, {"y": 2, "x": 0.10133004188537598}], "key": "keystone_v3.create_role", "view": "Square Root Choice"}, {"disabled": 5, "values": [{"y": 3, "x": 0.026653528213500977}, {"y": 1, "x": 0.03278088569641113}], "key": "keystone_v3.get_project", "view": "Square Root Choice"}, {"disabled": 6, "values": [{"y": 2, "x": 0.026758551597595215}, {"y": 2, "x": 0.03050708770751953}], "key": "keystone_v3.get_user", "view": "Square Root Choice"}, {"disabled": 7, "values": [{"y": 2, "x": 0.027465462684631348}, {"y": 2, "x": 0.031601905822753906}], "key": "keystone_v3.get_role", "view": "Square Root Choice"}, {"disabled": 8, "values": [{"y": 2, "x": 0.030337929725646973}, {"y": 2, "x": 0.0332028865814209}], "key": "keystone_v3.list_services", "view": "Square Root Choice"}, {"disabled": 9, "values": [{"y": 2, "x": 0.023954153060913086}, {"y": 2, "x": 0.02751016616821289}], "key": "keystone_v3.get_services", "view": "Square Root Choice"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.20585457483927408}, {"y": 1, "x": 0.22416027386983237}, {"y": 1, "x": 0.24246597290039062}], "key": "keystone_v3.create_project", "view": "Sturges Formula"}, {"disabled": 1, "values": [{"y": 1, "x": 0.323488712310791}, {"y": 1, "x": 0.3612213134765625}, {"y": 2, "x": 0.398953914642334}], "key": "keystone_v3.create_user", "view": "Sturges Formula"}, {"disabled": 2, "values": [{"y": 3, "x": 0.027723948160807293}, {"y": 0, "x": 0.03186806042989095}, {"y": 1, "x": 0.03601217269897461}], "key": "keystone_v3.list_roles", "view": "Sturges Formula"}, {"disabled": 3, "values": [{"y": 3, "x": 0.07733869552612305}, {"y": 0, "x": 0.0804903507232666}, {"y": 1, "x": 0.08364200592041016}], "key": "keystone_v3.add_role", "view": "Sturges Formula"}, {"disabled": 4, "values": [{"y": 2, "x": 0.0735620657602946}, {"y": 0, "x": 0.08744605382283528}, {"y": 2, "x": 0.10133004188537598}], "key": "keystone_v3.create_role", "view": "Sturges Formula"}, {"disabled": 5, "values": [{"y": 2, "x": 0.02461107571919759}, {"y": 1, "x": 0.02869598070780436}, {"y": 1, "x": 0.03278088569641113}], "key": "keystone_v3.get_project", "view": "Sturges Formula"}, {"disabled": 6, "values": [{"y": 2, "x": 0.025509039560953777}, {"y": 0, "x": 0.028008063634236652}, {"y": 2, "x": 0.03050708770751953}], "key": "keystone_v3.get_user", "view": "Sturges Formula"}, {"disabled": 7, "values": [{"y": 2, "x": 0.02608664830525716}, {"y": 0, "x": 0.028844277064005535}, {"y": 2, "x": 0.031601905822753906}], "key": "keystone_v3.get_role", "view": "Sturges Formula"}, {"disabled": 8, "values": [{"y": 1, "x": 0.029382944107055664}, {"y": 2, "x": 0.03129291534423828}, {"y": 1, "x": 0.0332028865814209}], "key": "keystone_v3.list_services", "view": "Sturges Formula"}, {"disabled": 9, "values": [{"y": 1, "x": 0.022768815358479817}, {"y": 1, "x": 0.025139490763346355}, {"y": 2, "x": 0.02751016616821289}], "key": "keystone_v3.get_services", "view": "Sturges Formula"}], [{"disabled": 0, "values": [{"y": 2, "x": 0.20127815008163452}, {"y": 1, "x": 0.21500742435455322}, {"y": 0, "x": 0.22873669862747192}, {"y": 1, "x": 0.24246597290039062}], "key": "keystone_v3.create_project", "view": "Rice Rule"}, {"disabled": 1, "values": [{"y": 1, "x": 0.31405556201934814}, {"y": 0, "x": 0.34235501289367676}, {"y": 1, "x": 0.37065446376800537}, {"y": 2, "x": 0.398953914642334}], "key": "keystone_v3.create_user", "view": "Rice Rule"}, {"disabled": 2, "values": [{"y": 3, "x": 0.026687920093536377}, {"y": 0, "x": 0.02979600429534912}, {"y": 0, "x": 0.032904088497161865}, {"y": 1, "x": 0.03601217269897461}], "key": "keystone_v3.list_roles", "view": "Rice Rule"}, {"disabled": 3, "values": [{"y": 3, "x": 0.07655078172683716}, {"y": 0, "x": 0.07891452312469482}, {"y": 0, "x": 0.08127826452255249}, {"y": 1, "x": 0.08364200592041016}], "key": "keystone_v3.add_role", "view": "Rice Rule"}, {"disabled": 4, "values": [{"y": 2, "x": 0.07009106874465942}, {"y": 0, "x": 0.08050405979156494}, {"y": 1, "x": 0.09091705083847046}, {"y": 1, "x": 0.10133004188537598}], "key": "keystone_v3.create_role", "view": "Rice Rule"}, {"disabled": 5, "values": [{"y": 2, "x": 0.0235898494720459}, {"y": 1, "x": 0.026653528213500977}, {"y": 0, "x": 0.029717206954956055}, {"y": 1, "x": 0.03278088569641113}], "key": "keystone_v3.get_project", "view": "Rice Rule"}, {"disabled": 6, "values": [{"y": 2, "x": 0.024884283542633057}, {"y": 0, "x": 0.026758551597595215}, {"y": 0, "x": 0.028632819652557373}, {"y": 2, "x": 0.03050708770751953}], "key": "keystone_v3.get_user", "view": "Rice Rule"}, {"disabled": 7, "values": [{"y": 2, "x": 0.02539724111557007}, {"y": 0, "x": 0.027465462684631348}, {"y": 1, "x": 0.029533684253692627}, {"y": 1, "x": 0.031601905822753906}], "key": "keystone_v3.get_role", "view": "Rice Rule"}, {"disabled": 8, "values": [{"y": 1, "x": 0.02890545129776001}, {"y": 1, "x": 0.030337929725646973}, {"y": 1, "x": 0.031770408153533936}, {"y": 1, "x": 0.0332028865814209}], "key": "keystone_v3.list_services", "view": "Rice Rule"}, {"disabled": 9, "values": [{"y": 1, "x": 0.022176146507263184}, {"y": 1, "x": 0.023954153060913086}, {"y": 0, "x": 0.02573215961456299}, {"y": 2, "x": 0.02751016616821289}], "key": "keystone_v3.get_services", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "iterations": {"pie": [["success", 4], ["errors", 0]], "iter": [["duration", [[1, 0.8375530242919922], [2, 0.8662710189819336], [3, 0.9253420829772949], [4, 0.8415977954864502]]], ["idle_duration", [[1, 0.0], [2, 0.0], [3, 0.0], [4, 0.0]]]], "histogram": {"data": [[{"disabled": null, "values": [{"y": 3, "x": 0.8814475536346436}, {"y": 1, "x": 0.9253420829772949}], "key": "task", "view": "Square Root Choice"}], [{"disabled": null, "values": [{"y": 3, "x": 0.8668160438537598}, {"y": 0, "x": 0.8960790634155273}, {"y": 1, "x": 0.9253420829772949}], "key": "task", "view": "Sturges Formula"}], [{"disabled": null, "values": [{"y": 2, "x": 0.8595002889633179}, {"y": 1, "x": 0.8814475536346436}, {"y": 0, "x": 0.9033948183059692}, {"y": 1, "x": 0.9253420829772949}], "key": "task", "view": "Rice Rule"}]], "views": [{"id": 0, "name": "Square Root Choice"}, {"id": 1, "name": "Sturges Formula"}, {"id": 2, "name": "Rice Rule"}]}}, "table": {"rows": [["keystone_v3.create_project", 0.188, 0.201, 0.233, 0.238, 0.242, 0.208, "100.0%", 4], ["keystone_v3.create_user", 0.286, 0.37, 0.396, 0.398, 0.399, 0.356, "100.0%", 4], ["keystone_v3.list_roles", 0.024, 0.026, 0.033, 0.035, 0.036, 0.028, "100.0%", 4], ["keystone_v3.add_role", 0.074, 0.075, 0.081, 0.082, 0.084, 0.077, "100.0%", 4], ["keystone_v3.create_role", 0.06, 0.079, 0.097, 0.099, 0.101, 0.08, "100.0%", 4], ["keystone_v3.get_project", 0.021, 0.024, 0.031, 0.032, 0.033, 0.026, "100.0%", 4], ["keystone_v3.get_user", 0.023, 0.027, 0.03, 0.03, 0.031, 0.027, "100.0%", 4], ["keystone_v3.get_role", 0.023, 0.027, 0.031, 0.031, 0.032, 0.027, "100.0%", 4], ["keystone_v3.list_services", 0.027, 0.03, 0.032, 0.033, 0.033, 0.03, "100.0%", 4], ["keystone_v3.get_services", 0.02, 0.025, 0.027, 0.027, 0.028, 0.024, "100.0%", 4], ["total", 0.838, 0.854, 0.908, 0.916, 0.925, 0.868, "100.0%", 4]], "cols": ["Action", "Min (sec)", "Median (sec)", "90%ile (sec)", "95%ile (sec)", "Max (sec)", "Avg (sec)", "Success", "Count"]}, "errors": [], "iterations_count": 4, "load_duration": 1.925157070159912, "complete_output": [[], [], [], []], "config": "{\n  \"KeystoneBasic.get_entities\": [\n    {\n      \"runner\": {\n        \"concurrency\": 2, \n        \"times\": 4, \n        \"type\": \"constant\"\n      }, \n      \"hooks\": [], \n      \"args\": {}, \n      \"sla\": {}, \n      \"context\": {}\n    }\n  ]\n}", "sla_success": true, "output_errors": [], "cls": "KeystoneBasic", "met": "get_entities", "has_output": false, "full_duration": 8.37742304801941, "load_profile": [["parallel iterations", [[0.0, 0], [0.019636602115631105, 1.957176790386671], [0.03927320423126221, 2], [0.058909806346893315, 2], [0.07854640846252442, 2], [0.09818301057815552, 2], [0.11781961269378663, 2], [0.13745621480941772, 2], [0.15709281692504884, 2], [0.17672941904067996, 2], [0.19636602115631105, 2], [0.21600262327194214, 2], [0.23563922538757326, 2], [0.2552758275032044, 2], [0.27491242961883544, 2], [0.29454903173446656, 2], [0.3141856338500977, 2], [0.3338222359657288, 2], [0.3534588380813599, 2], [0.373095440196991, 2], [0.3927320423126221, 2], [0.4123686444282532, 2], [0.4320052465438843, 2], [0.4516418486595154, 2], [0.4712784507751465, 2], [0.49091505289077764, 2], [0.5105516550064088, 2], [0.5301882571220399, 2], [0.5498248592376709, 2], [0.569461461353302, 2], [0.5890980634689331, 2], [0.6087346655845642, 2], [0.6283712677001954, 2], [0.6480078698158265, 2], [0.6676444719314576, 2], [0.6872810740470887, 2], [0.7069176761627198, 2], [0.7265542782783508, 2], [0.746190880393982, 2], [0.7658274825096131, 2], [0.7854640846252442, 2], [0.8051006867408753, 2], [0.8247372888565064, 2], [0.8443738909721376, 1.652645267242248], [0.8640104930877686, 1], [0.8836470952033997, 0.15794118577100713], [0.9032836973190308, 0], [0.9229202994346619, 0], [0.942556901550293, 0], [0.9621935036659242, 0], [0.9818301057815553, 0], [1.0014667078971864, 0.084114385209975], [1.0211033100128175, 1], [1.0407399121284486, 1], [1.0603765142440797, 1.9998370168311492], [1.0800131163597109, 2], [1.0996497184753418, 2], [1.1192863205909729, 2], [1.138922922706604, 2], [1.1585595248222351, 2], [1.1781961269378662, 2], [1.1978327290534974, 2], [1.2174693311691285, 2], [1.2371059332847596, 2], [1.2567425354003907, 2], [1.2763791375160218, 2], [1.296015739631653, 2], [1.315652341747284, 2], [1.3352889438629152, 2], [1.3549255459785463, 2], [1.3745621480941774, 2], [1.3941987502098085, 2], [1.4138353523254397, 2], [1.4334719544410706, 2], [1.4531085565567017, 2], [1.4727451586723328, 2], [1.492381760787964, 2], [1.512018362903595, 2], [1.5316549650192262, 2], [1.5512915671348573, 2], [1.5709281692504884, 2], [1.5905647713661195, 2], [1.6102013734817506, 2], [1.6298379755973817, 2], [1.6494745777130129, 2], [1.669111179828644, 2], [1.688747781944275, 2], [1.7083843840599062, 2], [1.7280209861755371, 2], [1.7476575882911682, 2], [1.7672941904067994, 2], [1.7869307925224305, 2], [1.8065673946380616, 2], [1.8262039967536927, 2], [1.8458405988693238, 2], [1.865477200984955, 2], [1.885113803100586, 1.8587894670513454], [1.9047504052162172, 1], [1.9243870073318483, 1], [1.9440236094474794, 0.03921568627450141], [1.9636602115631103, 0]]]], "name": "get_entities", "created_at": "2019-18-06T11:17:45", "additive_output": [], "sla": []}];
+
+      $scope.location = {
+        /* #/path/hash/sub/div */
+        normalize: function(str) {
+          /* Remove unwanted characters from string */
+          if (typeof str !== "string") { return "" }
+          return str.replace(/[^\w\-\.]/g, "")
+        },
+        uri: function(obj) {
+          /* Getter/Setter */
+          if (! obj) {
+            var uri = {path: "", hash: "", sub: "", div: ""};
+            var arr = ["div", "sub", "hash", "path"];
+            angular.forEach($location.url().split("/"), function(value){
+              var v = $scope.location.normalize(value);
+              if (v) { var k = arr.pop(); if (k) { this[k] = v }}
+            }, uri);
+            return uri
+          }
+          var arr = [obj.path, obj.hash, obj.sub, obj.div], res = [];
+          for (var i in arr) { if (! arr[i]) { break }; res.push(arr[i]) }
+          return $location.url("/" + res.join("/"))
+        },
+        path: function(path, hash) {
+          /* Getter/Setter */
+          if (path === "") { return this.uri({}) }
+          path = this.normalize(path);
+          var uri = this.uri();
+          if (! path) { return uri.path }
+          uri.path = path;
+          var _hash = this.normalize(hash);
+          if (_hash || hash === "") { uri.hash = _hash }
+          return this.uri(uri)
+        },
+        hash: function(hash) {
+          /* Getter/Setter */
+          if (hash) { this.uri({path:this.uri().path, hash:hash}) }
+          return this.uri().hash
+        }
+      }
+
+      /* Dispatch */
+
+      $scope.route = function(uri) {
+        if (! $scope.scenarios_map) { return }
+
+        // Expand menu if there is only one menu group
+        if ($scope.nav.length === 1) {
+          $scope.nav_idx = $scope.nav[0].idx;
+        }
+
+        if (uri.path in $scope.scenarios_map) {
+          $scope.view = {is_scenario:true};
+          $scope.scenario = $scope.scenarios_map[uri.path];
+          $scope.nav_idx = $scope.nav_map[uri.path];
+          if ($scope.scenario.iterations.histogram.views.length) {
+            $scope.mainHistogram = $scope.scenario.iterations.histogram.views[0]
+          }
+          if ($scope.scenario.atomic.histogram.views.length) {
+            $scope.atomicHistogram = $scope.scenario.atomic.histogram.views[0]
+          }
+          $scope.outputIteration = 0;
+          $scope.showTab(uri);
+        } else {
+          $scope.scenario = null;
+          if (uri.path === "source") {
+            $scope.view = {is_source:true}
+          } else {
+            $scope.view = {is_main:true}
+          }
+        }
+      }
+
+      $scope.$on("$locationChangeSuccess", function (event, newUrl, oldUrl) {
+        $scope.route($scope.location.uri())
+      });
+
+      $scope.showNav = function(nav_idx) { $scope.nav_idx = nav_idx }
+
+      /* Tabs */
+
+      $scope.tabs = [
+        {
+          id: "overview",
+          name: "Overview",
+          visible: function(){ return !! $scope.scenario.iterations.pie.length }
+        },{
+          id: "details",
+          name: "Details",
+          visible: function(){ return !! $scope.scenario.atomic.pie.length }
+        },{
+          id: "output",
+          name: "Scenario Data",
+          visible: function(){ return $scope.scenario.has_output }
+        },{
+          id: "hooks",
+          name: "Hooks",
+          visible: function(){ return $scope.scenario.hooks.length }
+        },{
+          id: "failures",
+          name: "Failures",
+          visible: function(){ return !! $scope.scenario.errors.length }
+        },{
+          id: "task",
+          name: "Input task",
+          visible: function(){ return !! $scope.scenario.config }
+        }
+      ];
+      $scope.tabs_map = {};
+      angular.forEach($scope.tabs,
+                      function(tab){ this[tab.id] = tab }, $scope.tabs_map);
+
+      $scope.showTab = function(uri) {
+        $scope.tab = uri.hash in $scope.tabs_map ? uri.hash : "overview";
+        if (uri.hash === "output") {
+          if (typeof $scope.scenario.output === "undefined") {
+            var has_additive = !! $scope.scenario.additive_output.length;
+            var has_complete = !! ($scope.scenario.complete_output.length
+                                   && $scope.scenario.complete_output[0].length);
+            $scope.scenario.output = {
+              has_additive: has_additive,
+              has_complete: has_complete,
+              length: has_additive + has_complete,
+              active: has_additive ? "additive" : (has_complete ? "complete" : "")
+            }
+          }
+          if (uri.sub && $scope.scenario.output["has_" + uri.sub]) {
+            $scope.scenario.output.active = uri.sub
+          }
+        }
+        else if (uri.hash === "hooks") {
+          if ($scope.scenario.hooks.length) {
+            var hook_idx = parseInt(uri.sub);
+
+            if (isNaN(hook_idx) || ($scope.scenario.hooks.length - hook_idx) <= 0) {
+              hook_idx = 0
+            }
+
+            if ($scope.scenario.hook_idx === hook_idx) {
+              return
+            }
+
+            $scope.scenario.hooks.cur = $scope.scenario.hooks[hook_idx];
+            $scope.scenario.hook_idx = hook_idx;
+            if (typeof $scope.scenario.hooks.cur.active === "undefined") {
+              if ($scope.scenario.hooks.cur.additive.length) {
+                $scope.scenario.hooks.cur.active = "additive"
+              }
+              if ($scope.scenario.hooks.cur.complete.length) {
+                if (typeof $scope.scenario.hooks.cur.active === "undefined") {
+                  $scope.scenario.hooks.cur.active = "complete"
+                }
+                $scope.set_hook_run()
+              }
+            }
+          }
+        }
+      }
+
+      for (var i in $scope.tabs) {
+        if ($scope.tabs[i].id === $scope.location.hash()) {
+          $scope.tab = $scope.tabs[i].id
+        }
+        $scope.tabs[i].isVisible = function() {
+          if ($scope.scenario) {
+            if (this.visible()) { return true }
+            /* If tab should be hidden but is selected - show another one */
+            if (this.id === $scope.location.hash()) {
+              for (var i in $scope.tabs) {
+                var tab = $scope.tabs[i];
+                if (tab.id != this.id && tab.visible()) {
+                  $scope.tab = tab.id;
+                  return false
+                }
+              }
+            }
+          }
+          return false
+        }
+      }
+
+      $scope.set_hook_run = function(idx) {
+        if (typeof idx !== "undefined") {
+          $scope.scenario.hooks.cur.run_idx = idx
+        }
+        else if (typeof $scope.scenario.hooks.cur.run_idx === "undefined") {
+          $scope.scenario.hooks.cur.run_idx = 0
+        }
+        idx = $scope.scenario.hooks.cur.run_idx;
+        if (($scope.scenario.hooks.cur.complete.length - idx) > 0) {
+          $scope.scenario.hooks.cur.run = $scope.scenario.hooks.cur.complete[idx]
+        }
+      }
+
+      $scope.complete_hooks_as_dropdown = function() {
+        return $scope.scenario.hooks.cur.complete.length > 10
+      }
+
+      /* Other helpers */
+
+      $scope.showError = function(message) {
+          return (function (e) {
+            e.style.display = "block";
+            e.textContent = message
+          })(document.getElementById("page-error"))
+      }
+
+      $scope.compact_atomics = function() {
+        return ($scope.scenario && $scope.scenario.atomic.iter.length < 9)
+      }
+
+      /* Initialization */
+
+      angular.element(document).ready(function(){
+        if (! $scope.scenarios.length) {
+          return $scope.showError("No data...")
+        }
+
+        /* Compose data mapping */
+
+        $scope.nav = [];
+        $scope.nav_map = {};
+        $scope.scenarios_map = {};
+        var met = [], itr = 0, cls_idx = 0;
+        var prev_cls, prev_met;
+
+        for (var idx in $scope.scenarios) {
+          var sc = $scope.scenarios[idx];
+          if (! prev_cls) {
+            prev_cls = sc.cls
+          }
+          else if (prev_cls !== sc.cls) {
+            $scope.nav.push({cls:prev_cls, met:met, idx:cls_idx});
+            prev_cls = sc.cls;
+            met = [];
+            itr = 1;
+            cls_idx += 1
+          }
+
+          if (prev_met !== sc.met) { itr = 1 };
+          sc.ref = $scope.location.normalize(sc.cls+"."+sc.met+(itr > 1 ? "-"+itr : ""));
+          $scope.scenarios_map[sc.ref] = sc;
+          $scope.nav_map[sc.ref] = cls_idx;
+          met.push({name:sc.name, itr:itr, idx:idx, ref:sc.ref});
+          prev_met = sc.met;
+          itr += 1;
+        }
+
+        if (met.length) {
+          $scope.nav.push({cls:prev_cls, met:met, idx:cls_idx})
+        }
+
+        /* Start */
+
+        var uri = $scope.location.uri();
+        uri.path = $scope.location.path();
+        $scope.route(uri);
+        $scope.$digest()
+      })
+    };
+
+    if (typeof angular === "object") {
+      angular.module("App", [])
+        .controller("Controller", ["$scope", "$location", controllerFunction])
+        .directive("widget", widgetDirective)
+    }
+
+
+</script>
+  <style>
+    body { margin:0; padding:0 0 50px; font-size:14px; font-family:Helvetica,Arial,sans-serif }
+    a, a:active, a:focus, a:visited { text-decoration:none; outline:none }
+    p { margin:0; padding:5px 0 }
+    p.thesis { padding:10px 0 }
+    h1 { color:#666; margin:0 0 20px; font-size:30px; font-weight:normal }
+    h2, .h2 { color:#666; margin:24px 0 6px; font-size:25px; font-weight:normal }
+    h3, .h3 { color:#777; margin:12px 0 4px; font-size:18px; font-weight:normal }
+    table { border-collapse:collapse; border-spacing:0; width:100%; font-size:12px; margin:0 0 10px }
+    table th { text-align:left; padding:8px; color:#000; border:2px solid #ddd; border-width:0 0 2px 0 }
+    table th.sortable { cursor:pointer }
+    table td { text-align:left; border-top:1px solid #ddd; padding:8px; color:#333 }
+    table.compact td { padding:4px 8px }
+    table.striped tr:nth-child(odd) td { background:#f9f9f9 }
+    table.linked tbody tr:hover { background:#f9f9f9; cursor:pointer }
+    .pointer { cursor:pointer }
+    .rich, .rich td { font-weight:bold }
+    .code { padding:10px; font-size:13px; color:#333; background:#f6f6f6; border:1px solid #e5e5e5; border-radius:4px }
+
+    .header { text-align:left; background:#333; font-size:18px; padding:13px 0; margin-bottom:20px; color:#fff; background-image:linear-gradient(to bottom, #444 0px, #222 100%) }
+    .header a, .header a:visited, .header a:focus { color:#999 }
+
+    .notify-error { padding:5px 10px; background:#fee; color:red }
+    .status-skip, .status-skip td { color:grey }
+    .status-pass, .status-pass td { color:green }
+    .status-fail, .status-fail td { color:red }
+    .capitalize { text-transform:capitalize }
+    
+    .aside { margin:0 20px 0 0; display:block; width:255px; float:left }
+    .aside > div { margin-bottom: 15px }
+    .aside > div div:first-child { border-top-left-radius:4px; border-top-right-radius:4px }
+    .aside > div div:last-child { border-bottom-left-radius:4px; border-bottom-right-radius:4px }
+    .navcls { color:#678; background:#eee; border:1px solid #ddd; margin-bottom:-1px; display:block; padding:8px 9px; font-weight:bold; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer }
+    .navcls.expanded { color:#469 }
+    .navcls.active { background:#428bca; background-image:linear-gradient(to bottom, #428bca 0px, #3278b3 100%); border-color:#3278b3; color:#fff }
+    .navmet { color:#555; background:#fff; border:1px solid #ddd; font-size:12px; display:block; margin-bottom:-1px; padding:8px 10px; text-align:left; text-overflow:ellipsis; white-space:nowrap; overflow:hidden; cursor:pointer }
+    .navmet:hover { background:#f8f8f8 }
+    .navmet.active, .navmet.active:hover { background:#428bca; background-image:linear-gradient(to bottom, #428bca 0px, #3278b3 100%); border-color:#3278b3; color:#fff }
+
+    .buttn { color:#555; background:#fff; border:1px solid #ddd; border-radius:5px; font-size:12px; margin-bottom:-1px; padding:5px 7px; text-align:left; text-overflow:ellipsis; white-space:nowrap; overflow:hidden; cursor:pointer }
+    .buttn:hover { background:#f8f8f8 }
+    .buttn.active, .bttn.active:hover { background:#428bca; background-image:linear-gradient(to bottom, #428bca 0px, #3278b3 100%); border-color:#3278b3; color:#fff; cursor:default }
+
+    .tabs { list-style:outside none none; margin:0 0 5px; padding:0; border-bottom:1px solid #ddd }
+    .tabs:after { clear:both }
+    .tabs li { float:left; margin-bottom:-1px; display:block; position:relative }
+    .tabs li div { border:1px solid transparent; border-radius:4px 4px 0 0; line-height:20px; margin-right:2px; padding:10px 15px; color:#428bca }
+    .tabs li div:hover { border-color:#eee #eee #ddd; background:#eee; cursor:pointer; }
+    .tabs li.active div { background:#fff; border-color:#ddd #ddd transparent; border-style:solid; border-width:1px; color:#555; cursor:default }
+    .failure-mesg { color:#900 }
+    .failure-trace { color:#333; white-space:pre; overflow:auto }
+
+    .link { color:#428BCA; padding:5px 15px 5px 5px; text-decoration:underline; cursor:pointer }
+    .link.active { color:#333; text-decoration:none; cursor:default }
+
+    .chart { padding:0; margin:0; width:890px }
+    .chart svg { height:300px; padding:0; margin:0; overflow:visible; float:right }
+    .chart.lower svg { height:180px }
+    .chart-label-y { font-size:12px; position:relative; top:5px; padding:0; margin:0 }
+
+    .expandable { cursor:pointer }
+    .clearfix { clear:both }
+    .sortable > .arrow { display:inline-block; width:12px; height:inherit; color:#c90 }
+    .content-main { margin:0 5px; display:block; float:left }
+
+    .content-wrap {  margin:0 auto; padding:0 5px;  }
+    
+    @media only screen and (min-width: 320px)  { .content-wrap { width:900px  } .content-main { width:600px } }
+    @media only screen and (min-width: 900px)  { .content-wrap { width:880px  } .content-main { width:590px } }
+    @media only screen and (min-width: 1000px) { .content-wrap { width:980px  } .content-main { width:690px } }
+    @media only screen and (min-width: 1100px) { .content-wrap { width:1080px } .content-main { width:790px } }
+    @media only screen and (min-width: 1200px) { .content-wrap { width:1180px } .content-main { width:890px } }
+
+  </style>
+</head>
+<body ng-controller="Controller">
+
+  <div class="header" id="page-header">
+    <div class="content-wrap">
+      <a href="https://github.com/openstack/rally">Rally</a>&nbsp;
+      <span>task results</span>
+    </div>
+  </div>
+
+  <div class="content-wrap" id="page-content">
+    
+
+    <p id="page-error" class="notify-error" style="display:none"></p>
+
+    <div id="content-nav" class="aside" ng-show="scenarios.length" ng-cloack>
+      <div>
+        <div class="navcls"
+             ng-class="{active:view.is_main}"
+             ng-click="location.path('')">Task overview</div>
+        <div class="navcls"
+             ng-class="{active:view.is_source}"
+             ng-click="location.path('source', '')">Input file</div>
+      </div>
+      <div>
+        <div class="navcls" title="{{n.cls}}"
+             ng-repeat-start="n in nav track by $index"
+             ng-click="showNav(n.idx)"
+             ng-class="{expanded:n.idx==nav_idx}">
+                <span ng-hide="n.idx==nav_idx">&#9658;</span>
+                <span ng-show="n.idx==nav_idx">&#9660;</span>
+                {{n.cls}}</div>
+        <div class="navmet" title="{{m.name}}"
+             ng-show="n.idx==nav_idx"
+             ng-class="{active:m.ref==scenario.ref}"
+             ng-click="location.path(m.ref)"
+             ng-repeat="m in n.met track by $index"
+             ng-repeat-end>{{m.name}}</div>
+      </div>
+    </div>
+
+    <div id="content-main" class="content-main" ng-show="scenarios.length" ng-cloak>
+
+      <div ng-show="view.is_main">
+        <h1>Task overview</h1>
+        <table class="linked compact"
+               ng-init="ov_srt='ref'; ov_dir=false">
+          <thead>
+            <tr>
+              <th class="sortable"
+                  title="Scenario name, with optional suffix of call number"
+                  ng-click="ov_srt='ref'; ov_dir=!ov_dir">
+                Scenario
+                <span class="arrow">
+                  <b ng-show="ov_srt=='ref' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='ref' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable"
+                  title="How long the scenario run, without context duration"
+                  ng-click="ov_srt='load_duration'; ov_dir=!ov_dir">
+                Load duration (s)
+                <span class="arrow">
+                  <b ng-show="ov_srt=='load_duration' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='load_duration' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable"
+                  title="Scenario duration plus context duration"
+                  ng-click="ov_srt='full_duration'; ov_dir=!ov_dir">
+                Full duration (s)
+                <span class="arrow">
+                  <b ng-show="ov_srt=='full_duration' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='full_duration' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable" title="Number of iterations"
+                  ng-click="ov_srt='iterations_count'; ov_dir=!ov_dir">
+                Iterations
+                <span class="arrow">
+                  <b ng-show="ov_srt=='iterations_count' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='iterations_count' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable" title="Scenario runner type"
+                  ng-click="ov_srt='runner'; ov_dir=!ov_dir">
+                Runner
+                <span class="arrow">
+                  <b ng-show="ov_srt=='runner' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='runner' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable" title="Number of errors occurred"
+                  ng-click="ov_srt='errors.length'; ov_dir=!ov_dir">
+                Errors
+                <span class="arrow">
+                  <b ng-show="ov_srt=='errors.length' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='errors.length' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable" title="Number of hooks"
+                  ng-click="ov_srt='hooks.length'; ov_dir=!ov_dir">
+                Hooks
+                <span class="arrow">
+                  <b ng-show="ov_srt=='hooks.length' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='hooks.length' && ov_dir">&#x25be;</b>
+                </span>
+              <th class="sortable" title="Whether SLA check is successful"
+                  ng-click="ov_srt='sla_success'; ov_dir=!ov_dir">
+                Success (SLA)
+                <span class="arrow">
+                  <b ng-show="ov_srt=='sla_success' && !ov_dir">&#x25b4;</b>
+                  <b ng-show="ov_srt=='sla_success' && ov_dir">&#x25be;</b>
+                </span>
+            <tr>
+          </thead>
+          <tbody>
+            <tr ng-repeat="sc in scenarios | orderBy:ov_srt:ov_dir"
+                ng-click="location.path(sc.ref)">
+              <td>{{sc.ref}}
+              <td>{{sc.load_duration | number:3}}
+              <td>{{sc.full_duration | number:3}}
+              <td>{{sc.iterations_count}}
+              <td>{{sc.runner}}
+              <td>{{sc.errors.length}}
+              <td>{{sc.hooks.length}}
+              <td>
+                <span ng-show="sc.sla_success" class="status-pass">&#x2714;</span>
+                <span ng-hide="sc.sla_success" class="status-fail">&#x2716;</span>
+            <tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div ng-show="view.is_source">
+        <h1>Input file</h1>
+        <pre class="code">{{source}}</pre>
+      </div>
+
+      <div ng-show="view.is_scenario">
+        <h1>{{scenario.cls}}.<wbr>{{scenario.name}} ({{scenario.full_duration | number:3}}s)</h1>
+        <ul class="tabs">
+          <li ng-repeat="t in tabs"
+              ng-show="t.isVisible()"
+              ng-class="{active:t.id == tab}"
+              ng-click="location.hash(t.id)">
+            <div>{{t.name}}</div>
+          </li>
+          <div class="clearfix"></div>
+        </ul>
+        <div ng-include="tab"></div>
+
+        <script type="text/ng-template" id="overview">
+          <p class="thesis">
+            Load duration: <b>{{scenario.load_duration | number:3}} s</b> &nbsp;
+            Full duration: <b>{{scenario.full_duration | number:3}} s</b> &nbsp;
+            Iterations: <b>{{scenario.iterations_count}}</b> &nbsp;
+            Failures: <b>{{scenario.errors.length}}</b> &nbsp;
+            Started at: <b>{{scenario.created_at}}</b>
+          </p>
+
+          <div ng-show="scenario.sla.length">
+            <h2>Service-level agreement</h2>
+            <table class="striped">
+              <thead>
+                <tr>
+                  <th>Criterion
+                  <th>Detail
+                  <th>Success
+                <tr>
+              </thead>
+              <tbody>
+                <tr class="rich"
+                    ng-repeat="row in scenario.sla track by $index"
+                    ng-class="{'status-fail':!row.success, 'status-pass':row.success}">
+                  <td>{{row.criterion}}
+                  <td>{{row.detail}}
+                  <td class="capitalize">{{row.success}}
+                <tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div widget="Table"
+               data="scenario.table"
+               lastrow-class="rich"
+               title="Total durations">
+          </div>
+
+          <div widget="StackedArea"
+               data="scenario.iterations.iter"
+               name-x="Iteration sequence number"
+               controls="true"
+               guide="true">
+          </div>
+
+          <div widget="StackedArea"
+               data="scenario.load_profile"
+               title="Load Profile"
+               title-class="h3"
+               name-x="Timeline (seconds)"
+               format-y="d"
+               format-x=",.2f"
+               class="lower">
+          </div>
+
+          <div widget="Pie"
+               data="scenario.iterations.pie"
+               title="Distribution"
+               title-class="h3"
+               style="float:left; width:40%; margin-top:15px">
+          </div>
+
+          <div widget="Histogram"
+               ng-if="scenario.iterations.histogram.data.length"
+               data="scenario.iterations.histogram.data[mainHistogram.id]"
+               style="float:left; width:59%; margin-top:15px; position:relative; top:40px">
+          </div>
+
+          <select ng-model="mainHistogram"
+                  ng-show="scenario.iterations.histogram.data.length"
+                  ng-options="i.name for i in scenario.iterations.histogram.views track by i.id"
+                  style="float:right; margin:45px 35px 0">
+          </select>
+
+          <div class="clearfix"></div>
+
+        </script>
+
+        <script type="text/ng-template" id="details">
+
+          <div widget="StackedArea"
+               data="scenario.atomic.iter"
+               title="Atomic Action Durations"
+               name-x="Iteration sequence number"
+               controls="true"
+               guide="true">
+          </div>
+
+          <div widget="Pie"
+               data="scenario.atomic.pie"
+               title="Distribution"
+               title-class="h3"
+               style="float:left; margin-top:15px"
+               ng-style="compact_atomics() ? {width:'40%'} : {}">
+          </div>
+
+          <div widget="Histogram" data="scenario.atomic.histogram.data[atomicHistogram.id]"
+               ng-if="scenario.atomic.histogram.data.length"
+               style="float:left; position:relative; top:40px"
+               ng-style="compact_atomics() ? {width:'59%', 'margin-top':'15px'} : {}">
+          </div>
+
+          <select ng-show="scenario.atomic.histogram.data.length"
+                  ng-model="atomicHistogram"
+                  ng-options="i.name for i in scenario.atomic.histogram.views track by i.id"
+                  style="float:right; margin:45px 35px 0">
+          </select>
+
+          <div class="clearfix"></div>
+
+        </script>
+
+        <script type="text/ng-template" id="output">
+
+          <div style="padding:10px 0 0">
+            <span class="link"
+                  ng-click="location.hash('output/additive')"
+                  ng-class="{active:scenario.output.active === 'additive'}"
+                  ng-if="scenario.output.has_additive">Aggregated</span>
+            <span class="link"
+                  ng-click="location.hash('output/complete')"
+                  ng-class="{active:scenario.output.active === 'complete'}"
+                  ng-if="scenario.output.has_complete">Per iteration</span>
+          </div>
+
+          <div ng-repeat="chart in scenario.additive_output"
+               ng-if="scenario.output.active === 'additive'">
+            <div widget="{{chart.widget}}"
+                 title="{{chart.title}}"
+                 description="{{chart.description}}"
+                 name-x="{{chart.axis_label}}"
+                 name-y="{{chart.label}}"
+                 data="chart.data">
+            </div>
+          </div>
+
+          <div ng-if="scenario.output.active === 'complete'" style="padding:10px 0 0">
+            <select ng-model="outputIteration">
+              <option ng-repeat="i in scenario.complete_output track by $index"
+                      value="{{$index}}">
+                Iteration {{$index}}
+            </select>
+
+            <div ng-repeat="chart in scenario.complete_output[outputIteration]">
+              <div widget="{{chart.widget}}"
+                   title="{{chart.title}}"
+                   description="{{chart.description}}"
+                   name-x="{{chart.axis_label}}"
+                   name-y="{{chart.label}}"
+                   data="chart.data">
+              </div>
+            </div>
+          </div>
+        </script>
+
+        <script type="text/ng-template" id="hooks">
+
+          <div style="padding:15px 0">
+            <span ng-repeat="h in scenario.hooks track by $index"
+                  class="buttn"
+                  title="{{h.desc}}"
+                  style="margin:0 10px 0 0"
+                  ng-click="location.hash('hooks/'+$index)"
+                  ng-class="{active:scenario.hook_idx===$index}">
+              {{h.name}}
+            </span>
+          </div>
+
+          <table class="striped" style="margin:5px 0 25px">
+            <thead>
+              <tr>
+                <th>Plugin
+                <th>Description
+            </thead>
+            <tbody>
+              <tr>
+                <td>{{scenario.hooks.cur.name}}
+                <td>{{scenario.hooks.cur.desc}}
+            </tbody>
+          </table>
+
+          <div>
+            <span class="link"
+                  ng-click="scenario.hooks.cur.active = 'additive'"
+                  ng-class="{active:scenario.hooks.cur.active === 'additive'}"
+                  ng-if="scenario.hooks.cur.additive.length">Aggregated</span>
+            <span class="link"
+                  ng-click="scenario.hooks.cur.active = 'complete'"
+                  ng-class="{active:scenario.hooks.cur.active === 'complete'}"
+                  ng-if="scenario.hooks.cur.complete.length">Per hook run</span>
+          </div>
+
+          <div ng-repeat="chart in scenario.hooks.cur.additive"
+               ng-if="scenario.hooks.cur.active === 'additive'">
+            <div widget="{{chart.widget}}"
+                 title="{{chart.title}}"
+                 description="{{chart.description}}"
+                 name-x="{{chart.axis_label}}"
+                 name-y="{{chart.label}}"
+                 data="chart.data">
+            </div>
+          </div>
+
+          <div ng-if="scenario.hooks.cur.active === 'complete'" style="padding:10px 0 0">
+
+            <select ng-if="complete_hooks_as_dropdown()"
+                    ng-model="scenario.hooks.cur.run_idx"
+                    ng-change="set_hook_run()">
+              <option ng-repeat="h in scenario.hooks.cur.complete track by $index"
+                      ng-selected="scenario.hooks.cur.run_idx == $index"
+                      value="{{$index}}">
+                {{h.triggered_by}}
+            </select>
+
+            <div ng-if="! complete_hooks_as_dropdown()"
+                 style="border:#ccc solid; border-width:1px 0 0; padding:5px 0 0">
+              <span ng-repeat="h in scenario.hooks.cur.complete track by $index"
+                    class="link"
+                    ng-class="{active:scenario.hooks.cur.run_idx == $index}"
+                    ng-click="set_hook_run($index)">
+                {{h.triggered_by}}
+              </span>
+            </div>
+
+            <table class="striped" style="margin:15px 0 15px">
+              <thead>
+                <tr>
+                  <th>Status
+                  <th>Triggered by
+                  <th>Started at
+                  <th>Finished at
+              </thead>
+              <tbody>
+                <tr>
+                  <td ng-style="scenario.hooks.cur.run.status === 'success' ? {color:'green'} : {color:'red'}">
+                    <b>{{scenario.hooks.cur.run.status}}</b>
+                  <td>{{scenario.hooks.cur.run.triggered_by}}
+                  <td>{{scenario.hooks.cur.run.started_at}}
+                  <td>{{scenario.hooks.cur.run.finished_at}}
+              </tbody>
+            </table>
+
+            <div ng-repeat="chart in scenario.hooks.cur.run.charts">
+              <div widget="{{chart.widget}}"
+                   title="{{chart.title}}"
+                   description="{{chart.description}}"
+                   name-x="{{chart.axis_label}}"
+                   name-y="{{chart.label}}"
+                   data="chart.data">
+              </div>
+            </div>
+          </div>
+        </script>
+
+        <script type="text/ng-template" id="failures">
+          <h2>Task failures (<ng-pluralize
+            count="scenario.errors.length"
+            when="{'1': '1 iteration', 'other': '{} iterations'}"></ng-pluralize> failed)
+          </h2>
+          <table class="striped">
+            <thead>
+              <tr>
+                <th>
+                <th>Iteration
+                <th>Exception type
+                <th>Exception message
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="expandable"
+                  ng-repeat-start="i in scenario.errors track by $index"
+                  ng-click="i.expanded = ! i.expanded">
+                <td>
+                  <span ng-hide="i.expanded">&#9658;</span>
+                  <span ng-show="i.expanded">&#9660;</span>
+                <td>{{i.iteration}}
+                <td>{{i.type}}
+                <td class="failure-mesg">{{i.message}}
+              </tr>
+              <tr ng-show="i.expanded" ng-repeat-end>
+                <td colspan="4" class="failure-trace">{{i.traceback}}
+              </tr>
+            </tbody>
+          </table>
+        </script>
+
+        <script type="text/ng-template" id="task">
+          <h2>Subtask Configuration</h2>
+          <pre class="code">{{scenario.config}}</pre>
+        </script>
+      </div>
+
+    </div>
+    <div class="clearfix"></div>
+
+
+  </div>
+
+  <script type="text/javascript">
+    if (! window.angular) {(function(f){
+      f(document.getElementById("content-nav"), "none");
+      f(document.getElementById("content-main"), "none");
+      f(document.getElementById("page-error"), "block").textContent = "Failed to load AngularJS framework"
+    })(function(e, s){e.style.display = s; return e})}
+</script>
+</body>
+</html>
